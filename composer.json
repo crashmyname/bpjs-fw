@@ -14,7 +14,7 @@
       "Bpjs\\Framework\\": "src/"
     },
     "files": [
-      "helper.php"
+      "src/helper.php"
     ]
   },
   "require": {
