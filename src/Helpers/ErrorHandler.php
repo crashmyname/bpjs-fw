@@ -101,6 +101,21 @@ class ErrorHandler
     public static function renderErrorPage($message)
     {
         http_response_code(500);
+        $isAjax = (
+        isset($_SERVER['HTTP_X_REQUESTED_WITH']) && 
+        strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest'
+        ) || 
+        (isset($_SERVER['HTTP_ACCEPT']) && str_contains($_SERVER['HTTP_ACCEPT'], 'application/json'));
+
+        if ($isAjax) {
+            header('Content-Type: application/json');
+            echo json_encode([
+                'status' => 500,
+                'error'  => 'Internal Server Error',
+                'message' => env('APP_DEBUG') === 'true' ? $message : 'Something went wrong on our server.',
+            ], JSON_PRETTY_PRINT);
+            exit;
+        }
         echo View::error(500);
         exit();
     }
