@@ -35,7 +35,7 @@ class ComposerStaticInit0cfa1ee7d83173590c780c271b359408
         ),
         'B' => 
         array (
-            'Bpjs\\framework\\' => 15,
+            'Bpjs\\Framework\\' => 15,
         ),
     );
 
@@ -85,7 +85,7 @@ class ComposerStaticInit0cfa1ee7d83173590c780c271b359408
         array (
             0 => __DIR__ . '/..' . '/markbaker/complex/classes/src',
         ),
-        'Bpjs\\framework\\' => 
+        'Bpjs\\Framework\\' => 
         array (
             0 => __DIR__ . '/../..' . '/src',
         ),

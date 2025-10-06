@@ -11,7 +11,7 @@
   ],
   "autoload": {
     "psr-4": {
-      "Bpjs\\framework\\": "src/"
+      "Bpjs\\Framework\\": "src/"
     }
   },
   "require": {
