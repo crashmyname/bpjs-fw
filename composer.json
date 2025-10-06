@@ -12,7 +12,10 @@
   "autoload": {
     "psr-4": {
       "Bpjs\\Framework\\": "src/"
-    }
+    },
+    "files": [
+      "helper.php"
+    ]
   },
   "require": {
     "php": "^8.0",
