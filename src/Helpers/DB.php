@@ -187,7 +187,7 @@ class DB
         } catch (PDOException $e) {
             error_log("Database Query Error: " . $e->getMessage());
             ErrorHandler::handleException($e);
-            return []; // Mengembalikan array kosong jika error
+            return [];
         }
     }
 
@@ -200,10 +200,9 @@ class DB
             $stmt->execute($params);
             return $stmt->fetchAll($fetchStyle);
         } catch (PDOException $e) {
-            // Tangani error dan log jika perlu
             error_log("Database Query Error: " . $e->getMessage());
             ErrorHandler::handleException($e);
-            return []; // Mengembalikan array kosong jika terjadi error
+            return [];
         }
     }
 
@@ -242,13 +241,17 @@ class DB
         return self::query($sql, $params)->fetchAll($fetchStyle);
     }
 
-    // Fetch satu data
+    /** 
+     * Fetch satu data
+    */
     public static function fetch($sql, $params = [], $fetchStyle = PDO::FETCH_OBJ)
     {
         return self::query($sql, $params)->fetch($fetchStyle);
     }
 
-    // Menghitung hasil query
+    /** 
+     * Menghitung hasil query
+     * */ 
     public static function count($sql, $params = [])
     {
         return self::query($sql, $params)->rowCount();

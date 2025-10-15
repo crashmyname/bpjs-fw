@@ -34,7 +34,6 @@ class View
                     include $layoutPath;
                 } else {
                     throw new \Exception("Layout file not found: $layoutPath");
-                    // View::render('errors/500');
                 }
             } else {
                 echo $content;
@@ -64,7 +63,6 @@ class View
                 throw new \Exception("Layout file not found: $layoutPath");
             }
 
-            // Layouts bisa akses variabel $content
             ob_start();
             include $layoutPath;
             return ob_get_clean();
@@ -91,7 +89,6 @@ class View
                     include $layoutPath;
                 } else {
                     throw new \Exception("Layout file not found: $layoutPath");
-                    // View::render('errors/500');
                 }
             } else {
                 echo $content;
@@ -104,7 +101,6 @@ class View
 
     public static function redirectTo($route, $flashData = [])
     {
-        // Store flash data in session
         if (!empty($flashData)) {
             $_SESSION['flash_data'] = $flashData;
         }
@@ -129,12 +125,12 @@ class View
             if (!file_exists($layoutPath)) {
                 throw new \Exception("Layout file not found: $layoutPath");
             }
-            // inject $content into layout
+
             ob_start();
             include $layoutPath;
-            return ob_get_clean(); // return full HTML
+            return ob_get_clean();
         }
 
-        return $content; // return plain view
+        return $content;
     }
 }

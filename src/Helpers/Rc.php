@@ -4,7 +4,6 @@ use Bpjs\Framework\Helpers\RateLimiter;
 use Bpjs\Framework\Helpers\CORSMiddleware;
 use Middlewares\SessionMiddleware;
 
-// Fungsi untuk menangani rate limiting dan CORS
 function handleMiddleware() {
     SessionMiddleware::start();
     $rateLimiter = new RateLimiter();

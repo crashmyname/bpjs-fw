@@ -44,10 +44,8 @@ class Session {
         return $_SESSION;
     }
 
-    // Menyimpan user ke dalam sesi
     public static function user() {
         if (self::has('user')) {
-            // return (object) self::get('user');
             return new User(self::get('user'));
         }
         return null;
@@ -57,10 +55,9 @@ class Session {
         if ($value !== null) {
             $_SESSION['flash'][$key] = $value;
         } else {
-            // Mengambil flash session
             $flashValue = $_SESSION['flash'][$key] ?? null;
             if (isset($_SESSION['flash'][$key])) {
-                unset($_SESSION['flash'][$key]); // Hapus setelah diakses
+                unset($_SESSION['flash'][$key]);
             }
             return $flashValue;
         }

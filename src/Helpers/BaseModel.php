@@ -1,12 +1,12 @@
 <?php
 
-namespace Bpjs\Framework\Helpers;
+namespace Helpers;
 
 use Bpjs\Core\Request;
 use PDO;
 use PDOException;
-use Bpjs\Framework\Helpers\Database;
-use Bpjs\Framework\Helpers\DB;
+use Helpers\Database;
+use Helpers\DB;
 
 class BaseModel
 {
@@ -28,7 +28,7 @@ class BaseModel
     protected $offset;
     protected $orWhereConditions = [];
     protected $with = [];
-
+    protected array $relations = [];
 
     public function __construct($attributes = [])
     {
@@ -44,9 +44,33 @@ class BaseModel
         try {
             $this->connection = Database::connection();
             if ($this->connection === null) {
+                if (env('APP_DEBUG') == 'false') {
+                    if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                        header('Content-Type: application/json', true, 500);
+                        echo json_encode([
+                            'statusCode' => 500,
+                            'error'      => 'Internal Server Error'
+                        ]);
+                    } else {
+                        return View::error(500);
+                    }
+                    exit;
+                }
                 throw new \Exception('Database connection failed.');
             }
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
             die();
         }
@@ -54,12 +78,10 @@ class BaseModel
 
     private function filterAttributes($attributes)
     {
-        // Jika fillable diisi, hanya ambil atribut yang ada di fillable
         if (!empty($this->fillable)) {
             return array_intersect_key($attributes, array_flip($this->fillable));
         }
 
-        // Jika guarded diisi, buang atribut yang ada di guarded
         if (!empty($this->guarded)) {
             return array_diff_key($attributes, array_flip($this->guarded));
         }
@@ -77,13 +99,11 @@ class BaseModel
         $this->connection->beginTransaction();
     }
 
-    // Commit Transaksi
     public function commit()
     {
         $this->connection->commit();
     }
 
-    // Rollback Transaksi
     public function rollback()
     {
         $this->connection->rollback();
@@ -102,7 +122,7 @@ class BaseModel
 
     public function selectRaw($rawExpression)
     {
-        $this->selectColumns[] = $rawExpression; // Menambahkan SQL mentah ke daftar kolom
+        $this->selectColumns[] = $rawExpression;
         return $this;
     }
 
@@ -116,12 +136,10 @@ class BaseModel
     public function where($column, $operator = '=', $value = null)
     {
         if (strtoupper($operator) === 'LIKE') {
-            // LIKE operator handling (handles wildcards %)
             $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
             $this->whereConditions[] = "{$column} LIKE :{$paramName}";
-            $this->whereParams[":{$paramName}"] = $value; // e.g., "%keyword%"
+            $this->whereParams[":{$paramName}"] = $value;
         } elseif ($value === null || $value == '') {
-            // Handle cases where the value is null, we use IS or IS NOT
             if ($operator === '=') {
                 $operator = 'IS';
             } elseif ($operator === '!=') {
@@ -129,7 +147,6 @@ class BaseModel
             }
             $this->whereConditions[] = "{$column} {$operator} NULL";
         } else {
-            // Default condition
             $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
             $this->whereConditions[] = "{$column} {$operator} :{$paramName}";
             $this->whereParams[":{$paramName}"] = $value;
@@ -156,7 +173,6 @@ class BaseModel
             throw new \InvalidArgumentException('The values array cannot be empty for whereIn condition.');
         }
 
-        // Generate unique placeholders for each value
         $placeholders = [];
         foreach ($values as $index => $value) {
             $paramName = str_replace('.', '_', $column) . "_in_{$index}";
@@ -164,7 +180,6 @@ class BaseModel
             $this->whereParams[":{$paramName}"] = $value;
         }
 
-        // Build the WHERE IN clause
         $placeholdersString = implode(', ', $placeholders);
         $this->whereConditions[] = "{$column} IN ({$placeholdersString})";
 
@@ -196,7 +211,6 @@ class BaseModel
 
     public function whereMonth($column, $month)
     {
-        // return $this->where("MONTH({$column})", '=', $month);
         $this->whereConditions[] = "MONTH({$column}) = :month";
         $this->whereParams[':month'] = $month;
         return $this;
@@ -204,7 +218,6 @@ class BaseModel
 
     public function whereYear($column, $year)
     {
-        // return $this->where("YEAR({$column})", '=', $year);
         $this->whereConditions[] = "YEAR({$column}) = :year";
         $this->whereParams[':year'] = $year;
         return $this;
@@ -212,14 +225,11 @@ class BaseModel
 
     public function whereBetween($column, $start, $end)
     {
-        // Generate unique parameter names to prevent conflicts
         $paramStart = str_replace('.', '_', $column) . "_start_" . count($this->whereParams);
         $paramEnd = str_replace('.', '_', $column) . "_end_" . count($this->whereParams);
 
-        // Tambahkan kondisi WHERE ke array
         $this->whereConditions[] = "{$column} BETWEEN :{$paramStart} AND :{$paramEnd}";
 
-        // Tambahkan parameter ke array parameter
         $this->whereParams[":{$paramStart}"] = $start;
         $this->whereParams[":{$paramEnd}"] = $end;
 
@@ -253,6 +263,18 @@ class BaseModel
         if (in_array(strtoupper($type), $validJoinTypes)) {
             $this->joins[] = "{$type} JOIN {$table} ON {$first} {$operator} {$second}";
         } else {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             throw new \InvalidArgumentException("Invalid join type: {$type}");
         }
 
@@ -344,22 +366,43 @@ class BaseModel
                 $model = new static();
                 $model->fill($row);
 
-                foreach ($this->with as $relation) {
-                    if (method_exists($model, $relation)) {
-                        $related = $model->$relation();
-                        $model->attributes[$relation] = $related;
-                    }
-                }
-
                 $models[] = $model;
             }
-
+            if (!empty($this->with)) {
+                foreach ($models as $model) {
+                    $model->load($this->with);
+                }
+            }
             return $models;
 
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
             return [];
         }
+    }
+
+    public function first()
+    {
+        $this->limit(1);
+        $results = $this->get(PDO::FETCH_ASSOC, true);
+
+        if (!empty($results)) {
+            return $results[0];
+        }
+
+        return null;
     }
 
     public function getWithRelations($fetchStyle = PDO::FETCH_OBJ)
@@ -372,18 +415,12 @@ class BaseModel
         try {
             $table = self::$dynamicTable ?? $this->table;
 
-            // Ambil current page dari query string (?page=...), default 1
             $currentPage = isset($_GET['page']) ? (int) $_GET['page'] : 1;
-            if ($currentPage < 1) {
-                $currentPage = 1;
-            }
+            if ($currentPage < 1) $currentPage = 1;
 
-            // Build query dasar (tanpa limit & offset)
+            // ==== BUILD BASE QUERY ====
             $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$table}";
-
-            if (!empty($this->joins)) {
-                $sql .= ' ' . implode(' ', $this->joins);
-            }
+            if (!empty($this->joins)) $sql .= ' ' . implode(' ', $this->joins);
 
             $whereClause = '';
             if (!empty($this->whereConditions) || !empty($this->orWhereConditions)) {
@@ -393,7 +430,6 @@ class BaseModel
                 if (!empty($this->whereConditions)) {
                     $conditions[] = '(' . implode(' AND ', $this->whereConditions) . ')';
                 }
-
                 if (!empty($this->orWhereConditions)) {
                     $conditions[] = '(' . implode(' OR ', $this->orWhereConditions) . ')';
                 }
@@ -402,47 +438,49 @@ class BaseModel
                 $sql .= $whereClause;
             }
 
-            if (!empty($this->groupBy)) {
-                $sql .= ' GROUP BY ' . $this->groupBy;
-            }
+            if (!empty($this->groupBy)) $sql .= ' GROUP BY ' . $this->groupBy;
+            if (!empty($this->orderBy)) $sql .= ' ORDER BY ' . implode(', ', $this->orderBy);
 
-            if (!empty($this->orderBy)) {
-                $sql .= ' ORDER BY ' . implode(', ', $this->orderBy);
-            }
-
-            // ==== HITUNG TOTAL DATA ====
             $countSql = "SELECT COUNT(*) as total FROM (
                 SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$table}";
-
-            if (!empty($this->joins)) {
-                $countSql .= ' ' . implode(' ', $this->joins);
-            }
-
-            if (!empty($whereClause)) {
-                $countSql .= " " . $whereClause;
-            }
-
+            if (!empty($this->joins)) $countSql .= ' ' . implode(' ', $this->joins);
+            if (!empty($whereClause)) $countSql .= " " . $whereClause;
             $countSql .= ") as subquery";
+
             $stmtCount = $this->connection->prepare($countSql);
             foreach ($this->whereParams as $key => $value) {
                 $stmtCount->bindValue($key, $value);
             }
             $stmtCount->execute();
-            $total = (int) $stmtCount->fetchColumn();
+            $total = (int)$stmtCount->fetchColumn();
 
-            // ==== HITUNG PAGINATION ====
-            $lastPage = max(1, (int) ceil($total / $perPage));
+            $lastPage = max(1, (int)ceil($total / $perPage));
             $currentPage = max(1, min($currentPage, $lastPage));
             $offset = ($currentPage - 1) * $perPage;
 
-            // ==== QUERY DATA PAGINATED ====
             $sql .= " LIMIT {$perPage} OFFSET {$offset}";
             $stmt = $this->connection->prepare($sql);
             foreach ($this->whereParams as $key => $value) {
                 $stmt->bindValue($key, $value);
             }
             $stmt->execute();
-            $data = $stmt->fetchAll($fetchStyle);
+            $rows = $stmt->fetchAll($fetchStyle);
+
+            $data = [];
+            foreach ($rows as $row) {
+                $model = new static();
+                $model->fill((array)$row);
+
+                if (!empty($this->with)) {
+                    $model->load($this->with);
+                }
+
+                if (method_exists($model, 'toCleanArray')) {
+                    $data[] = $model->toCleanArray();
+                } else {
+                    $data[] = (array)$row;
+                }
+            }
 
             return [
                 "data" => $data,
@@ -503,6 +541,18 @@ class BaseModel
 
             return $sql;
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
         }
     }
@@ -514,7 +564,6 @@ class BaseModel
             $bindings = $this->bindings ?? [];
 
             foreach ($bindings as $binding) {
-                // Escape nilai string dengan kutip satu
                 if (is_string($binding)) {
                     $binding = "'" . addslashes($binding) . "'";
                 } elseif (is_null($binding)) {
@@ -523,26 +572,26 @@ class BaseModel
                     $binding = $binding ? '1' : '0';
                 }
 
-                // Ganti ? pertama yang ditemukan
                 $sql = preg_replace('/\?/', $binding, $sql, 1);
             }
 
             return $sql;
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
         }
     }
-
-    public function first()
-    {
-        $this->limit(1);
-        $results = $this->get(PDO::FETCH_ASSOC, true); // ambil sebagai model
-        if (!empty($results)) {
-            return $results[0];
-        }
-        return null;
-    }
-
 
     public static function setCustomTable($parameter)
     {
@@ -570,6 +619,18 @@ class BaseModel
             $data = $stmt->fetchAll($fetchStyle);
             return $data;
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
             return [];
         }
@@ -589,17 +650,14 @@ class BaseModel
                 $sql .= ' WHERE ';
                 $conditions = [];
 
-                // Memasukkan where conditions
                 if (!empty($this->whereConditions)) {
                     $conditions[] = '(' . implode(' AND ', $this->whereConditions) . ')';
                 }
 
-                // Memasukkan orWhere conditions
                 if (!empty($this->orWhereConditions)) {
                     $conditions[] = '(' . implode(' OR ', $this->orWhereConditions) . ')';
                 }
 
-                // Gabungkan semua kondisi
                 $sql .= implode(' AND ', $conditions);
             }
 
@@ -614,6 +672,18 @@ class BaseModel
 
             return $result['count'];
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
             return 0;
         }
@@ -624,15 +694,26 @@ class BaseModel
         try {
             $instance = new static($attributes);
             if (self::$dynamicTable) {
-                $instance->table = self::$dynamicTable; // Gunakan tabel yang telah diset secara statis
+                $instance->table = self::$dynamicTable;
             }
-            // Jika properti $table kosong, set ke default tabel model
             if (!$instance->table) {
-                $instance->table = isset($instance->table) ? $instance->table : 'default_table'; // Default based on the model
+                $instance->table = isset($instance->table) ? $instance->table : 'default_table';
             }
             $instance->save();
             return $instance;
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
             return null;
         }
@@ -640,72 +721,120 @@ class BaseModel
 
     public function save()
     {
-        try {
+        try{
             $this->connection = DB::getConnection();
             $table = self::$dynamicTable ?? $this->table;
-
-            // pastikan ada data
-            if (empty($this->attributes)) {
-                throw new \Exception("No attributes set for save()");
-            }
-
+    
             if (!empty($this->attributes[$this->primaryKey])) {
-                // update
                 $this->updates();
             } else {
-                // insert
                 $columns = implode(',', array_keys($this->attributes));
                 $placeholders = ':' . implode(', :', array_keys($this->attributes));
-
                 $sql = "INSERT INTO {$table} ({$columns}) VALUES ({$placeholders})";
                 $stmt = $this->connection->prepare($sql);
-
+    
                 foreach ($this->attributes as $key => $value) {
                     $stmt->bindValue(':' . $key, $value);
                 }
-
+    
                 $stmt->execute();
-
-                // simpan id terakhir kalau ada primaryKey
                 if ($this->primaryKey) {
                     $this->attributes[$this->primaryKey] = $this->connection->lastInsertId();
                 }
             }
-
-            return true; // biar bisa dicek berhasil/tidak
-        } catch (\Exception $e) {
+    
+            return true;
+        } catch (\Exception $e){
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
         }
     }
 
-    public function updates()
+    public function updates($data = null)
     {
         try {
-            if (empty($this->table)) {
-                $this->table = 'default_table'; // Fallback jika table tidak diatur
-            }
+            $this->connection = DB::getConnection();
+            $table = self::$dynamicTable ?? $this->table;
+
+            $dataToUpdate = $data ?? array_filter($this->attributes, function($key) {
+                return !in_array($key, $this->with ?? []);
+            }, ARRAY_FILTER_USE_KEY);
+
             $setClause = [];
-            foreach ($this->attributes as $key => $value) {
+            foreach ($dataToUpdate as $key => $value) {
                 $setClause[] = "{$key} = :{$key}";
             }
             $setClause = implode(', ', $setClause);
 
-            $sql = "UPDATE {$this->table} SET {$setClause} WHERE {$this->primaryKey} = :{$this->primaryKey}";
-
+            $sql = "UPDATE {$table} SET {$setClause} WHERE {$this->primaryKey} = :{$this->primaryKey}";
             $stmt = $this->connection->prepare($sql);
 
-            foreach ($this->attributes as $key => $value) {
+            foreach ($dataToUpdate as $key => $value) {
                 $stmt->bindValue(':' . $key, $value);
             }
 
+            $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
             $stmt->execute();
         } catch (\Exception $e) {
             ErrorHandler::handleException($e);
         }
     }
+
+    public function saveWithRelations(array $relations = [])
+    {
+        $this->save();
+
+        $relationsToSave = !empty($relations)
+            ? $relations
+            : array_keys($this->relations);
+
+        foreach ($relationsToSave as $relationName) {
+            if (!isset($this->relations[$relationName])) continue;
+
+            $relationInfo = $this->$relationName();
+            $relationData = $this->relations[$relationName];
+            $relatedModel = $relationInfo['model'];
+
+            switch ($relationInfo['type']) {
+                case 'hasOne':
+                    $relationData->{$relationInfo['foreignKey']} =
+                        $this->attributes[$relationInfo['localKey']];
+                    $relationData->save();
+                    break;
+
+                case 'hasMany':
+                    foreach ($relationData as $item) {
+                        $item->{$relationInfo['foreignKey']} =
+                            $this->attributes[$relationInfo['localKey']];
+                        $item->save();
+                    }
+                    break;
+
+                case 'belongsTo':
+                    $relationData->save();
+                    $this->attributes[$relationInfo['foreignKey']] =
+                        $relationData->{$relationInfo['ownerKey']};
+                    $this->save();
+                    break;
+            }
+        }
+
+        return $this;
+    }
+
     public function update($data)
     {
-        // Buat klausa SET untuk SQL query
         $this->connection = DB::getConnection();
         $setClause = [];
         foreach ($data as $key => $value) {
@@ -714,21 +843,16 @@ class BaseModel
         $setClause = implode(', ', $setClause);
 
         $table = self::$dynamicTable ?? $this->table;
-        // Siapkan SQL query untuk update
         $sql = "UPDATE {$table} SET {$setClause} WHERE {$this->primaryKey} = :{$this->primaryKey}";
 
-        // Siapkan statement
         $stmt = $this->connection->prepare($sql);
 
-        // Bind data baru yang akan diupdate
         foreach ($data as $key => $value) {
             $stmt->bindValue(':' . $key, $value);
         }
 
-        // Bind primary key untuk WHERE clause
         $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
 
-        // Eksekusi query
         $stmt->execute();
     }
     public function delete()
@@ -740,13 +864,26 @@ class BaseModel
             $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
             $stmt->execute();
         } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
             ErrorHandler::handleException($e);
         }
     }
+
     public function lockForUpdate()
     {
         if (empty($this->table)) {
-            $this->table = 'default_table'; // Fallback jika table tidak diatur
+            $this->table = 'default_table';
         }
         $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$this->table}";
 
@@ -783,7 +920,7 @@ class BaseModel
     public function sharedLock()
     {
         if (empty($this->table)) {
-            $this->table = 'default_table'; // Fallback jika table tidak diatur
+            $this->table = 'default_table';
         }
         $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$this->table}";
 
@@ -838,64 +975,55 @@ class BaseModel
 
     public function hasOne($relatedModel, $foreignKey, $localKey = 'id')
     {
-        $relatedInstance = new $relatedModel();
-        if (isset($this->attributes[$localKey])) {
-            $localValue = $this->attributes[$localKey];
-        } else {
-            error_log("Atribut '{$localKey}' tidak ditemukan.");
-            return null; // Atau tangani kesalahan sesuai kebutuhan
-        }
-    
-        // Memastikan bahwa nilai yang akan digunakan untuk query adalah nilai dari atribut
-        $relatedInstance->where($foreignKey, '=', $localValue);
-        return $relatedInstance->first();
+        return [
+            'type' => 'hasOne',
+            'model' => new $relatedModel(),
+            'foreignKey' => $foreignKey,
+            'localKey' => $localKey,
+        ];
     }
 
-    // One-to-Many relationship
     public function hasMany($relatedModel, $foreignKey, $localKey = 'id')
     {
-        if (!isset($this->attributes[$localKey])) {
-            return []; // tidak ada localKey di atribut
-        }
-
-        $relatedInstance = new $relatedModel();
-        return $relatedInstance
-            ->where($foreignKey, '=', $this->attributes[$localKey])
-            ->get(PDO::FETCH_ASSOC, true); // ambil sebagai model
+        return [
+            'type' => 'hasMany',
+            'model' => new $relatedModel(),
+            'foreignKey' => $foreignKey,
+            'localKey' => $localKey,
+        ];
     }
 
-    // Belongs-to relationship
     public function belongsTo($relatedModel, $foreignKey, $ownerKey = 'id')
     {
-        $relatedInstance = new $relatedModel();
-        return $relatedInstance->where($ownerKey, '=', $this->attributes[$foreignKey])->first();
+        return [
+            'type' => 'belongsTo',
+            'model' => new $relatedModel(),
+            'foreignKey' => $foreignKey,
+            'ownerKey' => $ownerKey,
+        ];
     }
 
-    // Many-to-Many relationship
     public function belongsToMany($relatedModel, $pivotTable, $foreignKey, $relatedKey, $localKey = 'id', $relatedLocalKey = 'id')
     {
-        $relatedInstance = new $relatedModel();
-        $query = "SELECT {$relatedInstance->table}.* FROM {$relatedInstance->table} 
-                  INNER JOIN {$pivotTable} ON {$relatedInstance->table}.{$relatedLocalKey} = {$pivotTable}.{$relatedKey}
-                  WHERE {$pivotTable}.{$foreignKey} = :local_key";
-
-        $stmt = $this->connection->prepare($query);
-        $stmt->bindValue(':local_key', $this->attributes[$localKey]);
-        $stmt->execute();
-
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return [
+            'type' => 'belongsToMany',
+            'model' => new $relatedModel(),
+            'pivot' => $pivotTable,
+            'foreignKey' => $foreignKey,
+            'relatedKey' => $relatedKey,
+            'localKey' => $localKey,
+            'relatedLocalKey' => $relatedLocalKey,
+        ];
     }
 
     public static function exists($conditions)
     {
         $query = static::query();
 
-        // Tambahkan semua kondisi where
         foreach ($conditions as $field => $value) {
             $query->where($field, '=', $value);
         }
 
-        // Periksa apakah ada data dengan membatasi hasil ke satu dan memeriksa jika ada hasil
         $result = $query->first();
 
         return $result !== null;
@@ -907,23 +1035,131 @@ class BaseModel
             throw new \Exception("Relation {$relation} not defined in " . static::class);
         }
 
-        $this->$relation = $this->$relation(); // jalankan method relasi dan simpan hasilnya
+        $this->$relation = $this->$relation();
         return $this;
     }
 
 
-    public function load($relations)
+    public function load(array $relations)
     {
-        $this->with = is_array($relations) ? $relations : func_get_args();
+        foreach ($relations as $relation) {
+            if (!method_exists($this, $relation)) continue;
+
+            $relationInfo = $this->$relation();
+            if (!is_array($relationInfo)) continue;
+
+            $relatedModel = $relationInfo['model'];
+
+            switch ($relationInfo['type']) {
+                case 'belongsTo':
+                    $foreignKey = $relationInfo['foreignKey'];
+                    $ownerKey   = $relationInfo['ownerKey'];
+
+                    if (isset($this->attributes[$foreignKey])) {
+                        $this->relations[$relation] = $relatedModel::query()
+                            ->where($ownerKey, '=', $this->attributes[$foreignKey])
+                            ->first();
+                    }
+                    break;
+
+                case 'hasOne':
+                    $foreignKey = $relationInfo['foreignKey'];
+                    $localKey   = $relationInfo['localKey'];
+
+                    if (isset($this->attributes[$localKey])) {
+                        $this->relations[$relation] = $relatedModel::query()
+                            ->where($foreignKey, '=', $this->attributes[$localKey])
+                            ->first();
+                    }
+                    break;
+
+                case 'hasMany':
+                    $foreignKey = $relationInfo['foreignKey'];
+                    $localKey   = $relationInfo['localKey'];
+
+                    if (isset($this->attributes[$localKey])) {
+                        $this->relations[$relation] = $relatedModel::query()
+                            ->where($foreignKey, '=', $this->attributes[$localKey])
+                            ->get();
+                    }
+                    break;
+
+                case 'belongsToMany':
+                    $pivotTable       = $relationInfo['pivot'];
+                    $foreignKey       = $relationInfo['foreignKey'];
+                    $relatedKey       = $relationInfo['relatedKey'];
+                    $localKey         = $relationInfo['localKey'];
+                    $relatedLocalKey  = $relationInfo['relatedLocalKey'];
+
+                    if (!isset($this->attributes[$localKey])) break;
+
+                    $conn = DB::getConnection();
+                    $sql = "
+                        SELECT r.* 
+                        FROM {$relatedModel->table} AS r
+                        INNER JOIN {$pivotTable} AS p
+                            ON p.{$relatedKey} = r.{$relatedLocalKey}
+                        WHERE p.{$foreignKey} = :localKey
+                    ";
+                    $stmt = $conn->prepare($sql);
+                    $stmt->bindValue(':localKey', $this->attributes[$localKey]);
+                    $stmt->execute();
+
+                    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    $relatedData = [];
+                    foreach ($rows as $row) {
+                        $instance = new $relatedModel();
+                        $instance->fill($row);
+                        $relatedData[] = $instance;
+                    }
+
+                    $this->relations[$relation] = $relatedData;
+                    break;
+            }
+        }
+
+        $this->with = $relations;
         return $this;
     }
 
+    public function toCleanArray()
+    {
+        $data = [];
+
+        foreach ($this->attributes as $key => $value) {
+            $data[$key] = $value;
+        }
+
+        foreach ($this->relations as $relation => $relValue) {
+            if ($relValue instanceof self) {
+                $data[$relation] = $relValue->toCleanArray();
+            } elseif (is_array($relValue)) {
+                $data[$relation] = array_map(function ($item) {
+                    return $item instanceof self ? $item->toCleanArray() : $item;
+                }, $relValue);
+            } else {
+                $data[$relation] = $relValue;
+            }
+        }
+
+        if (property_exists($this, 'hidden') && !empty($this->hidden)) {
+            foreach ($this->hidden as $field) unset($data[$field]);
+        }
+
+        return $data;
+    }
+
+
+    public static function toCleanArrayCollection($models)
+    {
+        if (!is_array($models)) return [];
+        return array_map(fn($item) => $item instanceof self ? $item->toCleanArray() : $item, $models);
+    }
 
     public function toArray()
     {
         $data = $this->attributes;
 
-        // Ambil juga relasi yang sudah dimuat (property tambahan selain attributes)
         foreach (get_object_vars($this) as $key => $value) {
             if (!in_array($key, [
                 'table','primaryKey','fillable','guarded','attributes',
@@ -945,20 +1181,17 @@ class BaseModel
         return $data;
     }
 
-
     public function __get($key)
     {
-        // Kalau ada di attributes
+        if (array_key_exists($key, $this->relations)) {
+            return $this->relations[$key];
+        }
         if (array_key_exists($key, $this->attributes)) {
             return $this->attributes[$key];
         }
-
-        // Kalau ada relasi yang sudah dimuat
         if (method_exists($this, $key)) {
-            if (!isset($this->attributes[$key])) {
-                $this->attributes[$key] = $this->$key();
-            }
-            return $this->attributes[$key];
+            $this->load([$key]);
+            return $this->relations[$key] ?? null;
         }
 
         return null;
@@ -966,7 +1199,12 @@ class BaseModel
 
     public function __set($key, $value)
     {
-        $this->attributes[$key] = $value;
+        if ($value instanceof BaseModel || (is_array($value) && isset($value[0]) && $value[0] instanceof BaseModel)) {
+            $this->relations[$key] = $value;
+        } else {
+            $this->attributes[$key] = $value;
+        }
     }
+
 
 }

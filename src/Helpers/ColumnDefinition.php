@@ -9,7 +9,7 @@ class ColumnDefinition
     protected ?string $foreignKey = null;
     protected ?string $foreignTable = null;
     protected ?string $onDelete = null;
-    protected bool $nullable = false; // ← tambah ini
+    protected bool $nullable = false;
 
     public function __construct(string $type, string $name)
     {
@@ -86,7 +86,6 @@ class ColumnDefinition
     {
         $sql = "`{$this->name}` {$this->type}";
 
-        // Secara default NOT NULL kecuali diberi nullable()
         if ($this->nullable) {
             $sql .= ' NULL';
         } else {

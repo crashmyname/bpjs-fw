@@ -14,7 +14,6 @@ class Bpjs
         'db:migrate' => 'runMigrations',
         'db:rollback' => 'rollbackMigration',
         'serve' => 'Serve',
-        // Tambahkan perintah lainnya di sini
     ];
 
     public function run($argv)
@@ -23,7 +22,6 @@ class Bpjs
         $argument = $argv[2] ?? null;
         $options = array_slice($argv, 3);
 
-        // Cek apakah perintah dikenali
         if ($command && isset($this->commands[$command])) {
             $method = $this->commands[$command];
             $this->$method($argument, $options);
@@ -103,7 +101,6 @@ class Bpjs
             return;
         }
 
-        // Pisahkan namespace dan nama file
         $pathParts = explode('/', $name);
         $className = array_pop($pathParts);
         $namespace = 'App\\Controllers';
@@ -112,7 +109,6 @@ class Bpjs
         }
         $directory = 'app/Controllers/' . implode('/', $pathParts);
 
-        // Pastikan folder target ada
         if (!is_dir($directory)) {
             mkdir($directory, 0777, true); // Buat folder secara rekursif
         }
@@ -151,18 +147,15 @@ class Bpjs
         $fileName = "{$timestamp}_{$name}.php";
         $filePath = "database/migrations/{$fileName}";
 
-        // Pastikan direktori ada
         if (!is_dir('database/migrations')) {
             mkdir('database/migrations', 0777, true);
         }
 
-        // Ambil nama tabel dari pola
-        $table = 'unknown'; // default untuk jaga-jaga
+        $table = 'unknown';
         if (preg_match('/create_(.*?)_table/', $fileName, $matches)) {
             $table = $matches[1];
         }
 
-        // Buat nama class berdasarkan input
         $className = str_replace(' ', '', ucwords(str_replace('_', ' ', $name)));
 
         $migrationTemplate = "<?php\n\n";
@@ -262,10 +255,8 @@ class Bpjs
     {
         $name = pathinfo($file, PATHINFO_FILENAME);
 
-        // Hapus bagian timestamp: 2025_06_30_131244_
         $name = preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', $name);
 
-        // Ubah ke CamelCase class name
         return str_replace(' ', '', ucwords(str_replace('_', ' ', $name)));
     }
 
@@ -274,7 +265,6 @@ class Bpjs
         $logPath = 'database/migrations/.migrated.json';
         $migrated = file_exists($logPath) ? json_decode(file_get_contents($logPath), true) : [];
 
-        // Hapus dulu jika sudah ada (untuk menggantikan versi lama)
         $migrated = array_filter($migrated, fn($f) => $f !== $file);
 
         $migrated[] = $file;
@@ -357,13 +347,12 @@ class Bpjs
         }
         if (!filter_var($host, FILTER_VALIDATE_IP)) {
             echo "Error: Invalid host address provided: $host\n";
-            exit(1); // Exit with error
+            exit(1);
         }
 
-        // Validate port (must be numeric and within range)
         if (!is_numeric($port) || (int) $port < 1024 || (int) $port > 65535) {
             echo "Error: Invalid port number provided: $port\n";
-            exit(1); // Exit with error
+            exit(1);
         }
 
         echo "Starting development server on http://{$host}:{$port}\n";

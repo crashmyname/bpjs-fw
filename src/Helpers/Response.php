@@ -7,7 +7,7 @@ class Response
     {
         header('Content-Type: application/json', true, $status);
         echo json_encode($data);
-        exit; // Ensure no further processing happens
+        exit;
     }
     public static function success($message = 'Operation successful', $status = 200)
     {

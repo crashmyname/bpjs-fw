@@ -115,7 +115,6 @@ class Api
             $route = self::findRoute($method, $uri);
 
             if (!$route) {
-                // Tidak ada route ditemukan → gunakan error handler 404
                 http_response_code(404);
                 return new \Bpjs\Core\Response(View::error(404), 404);
             }
@@ -137,7 +136,6 @@ class Api
                 }
             }
 
-            // Validasi CSRF Token jika POST
             if ($method === 'POST') {
                 $csrfToken = $request->get('csrf_token') ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
                 if (empty($csrfToken) || !isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $csrfToken)) {
@@ -145,7 +143,6 @@ class Api
                 }
             }
 
-            // Jalankan handler (controller atau closure)
             if (is_array($handler) && count($handler) === 2) {
                 [$controller, $action] = $handler;
                 $instance = new $controller();
@@ -164,7 +161,6 @@ class Api
             return $result instanceof Response ? $result : new \Bpjs\Core\Response($result);
 
         } catch (Throwable $e) {
-            // Serahkan ke ErrorHandler global
             ErrorHandler::handleException($e);
             exit;
         }

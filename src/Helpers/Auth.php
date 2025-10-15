@@ -86,10 +86,7 @@ class Auth
 
     public static function check(): bool
     {
-        // Sudah login via session?
         if (self::user()) return true;
-
-        // Coba ambil dari cookie
         if (isset($_COOKIE['remember_user'])) {
             $user = User::find($_COOKIE['remember_user']);
             if ($user) {

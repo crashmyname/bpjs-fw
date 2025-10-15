@@ -11,7 +11,7 @@ class CSRFMiddleware
         if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'PUT' || $_SERVER['REQUEST_METHOD'] === 'DELETE' || $_SERVER['REQUEST_METHOD'] === 'PATCH') {
             if (!CSRFToken::validateToken($request->csrf_token)) {
                 include __DIR__ . '/../../app/handle/errors/505.php';
-                exit(); // Menghentikan eksekusi jika token tidak valid
+                exit();
             }
         }
     }

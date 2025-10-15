@@ -316,13 +316,11 @@ function setTime()
 
 function storeFile($file, $targetDirectory)
 {
-    // Cek apakah ada file yang diunggah
     if ($file['error'] === UPLOAD_ERR_OK) {
         $tmpName = $file['tmp_name'];
         $originalName = basename($file['name']);
         $targetPath = rtrim($targetDirectory, '/') . '/' . $originalName;
 
-        // Pindahkan file dari lokasi sementara ke tujuan
         if (move_uploaded_file($tmpName, $targetPath)) {
             return ['status' => 'success', 'message' => 'File berhasil diunggah.', 'path' => $targetPath];
         } else {
@@ -450,13 +448,11 @@ function env($key, $default = null)
             $env = [];
         }
 
-        // Set ke $_ENV untuk kompatibilitas jika diperlukan
         foreach ($env as $envKey => $envValue) {
             $_ENV[$envKey] = $envValue;
         }
     }
 
-    // Ambil nilai berdasarkan key
     return array_key_exists($key, $env) ? $env[$key] : $default;
 }
 
@@ -464,7 +460,6 @@ function config(string $key, $default = null)
 {
     static $configs = [];
 
-    // Cek apakah key valid, minimal harus ada satu titik
     if (!str_contains($key, '.')) {
         return $default;
     }

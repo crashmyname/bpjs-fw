@@ -59,8 +59,7 @@ class BaseController {
             }
         </style>
         ';
-        
-        // Tambahkan JavaScript untuk collapsible functionality
+
         echo '
         <script>
             document.addEventListener("DOMContentLoaded", function() {
@@ -79,12 +78,10 @@ class BaseController {
             });
         </script>
         ';
-        
-        // Fungsi rekursif untuk memformat data
+
         function format_data($data) {
             $result = '';
-    
-            // Cek tipe data sebelum foreach
+
             if (is_array($data) || is_object($data)) {
                 foreach ($data as $key => $value) {
                     $result .= '<span class="key">[' . htmlspecialchars($key) . ']</span> => ';
@@ -104,7 +101,6 @@ class BaseController {
                     }
                 }
             } else {
-                // Jika bukan array/object, tampilkan langsung
                 if (is_string($data)) {
                     $result .= '<span class="string">"' . htmlspecialchars($data) . '"</span><br>';
                 } elseif (is_numeric($data)) {
@@ -119,9 +115,7 @@ class BaseController {
             return $result;
         }
     
-        // Cek tipe data utama
         if (is_object($data)) {
-            // Menggunakan refleksi jika data adalah objek
             $reflection = new ReflectionClass($data);
             $properties = $reflection->getProperties();
             $formatted_data = [];
@@ -130,11 +124,9 @@ class BaseController {
                 $formatted_data[$property->getName()] = $property->getValue($data);
             }
         } else {
-            // Jika data adalah array atau tipe sederhana lainnya
             $formatted_data = $data;
         }
-    
-        // Tampilkan hasil yang sudah diformat
+
         echo '<div class="pretty-print">';
         echo format_data($formatted_data);
         echo '</div>';
@@ -261,7 +253,7 @@ class BaseController {
         $currentAttempts = $_SESSION[$key] ?? 0;
     
         if ($currentAttempts >= $maxAttempts) {
-            return false; // Terlalu banyak percobaan
+            return false;
         }
     
         $_SESSION[$key] = $currentAttempts + 1;

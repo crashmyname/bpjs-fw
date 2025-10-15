@@ -31,7 +31,6 @@ class JobController
     // Fungsi statis untuk mendapatkan semua job
     public static function getJobs()
     {
-        // Dapatkan semua job dari database
         $stmt = self::$db->query("SELECT * FROM jobs ORDER BY id DESC");
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }

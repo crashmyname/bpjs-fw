@@ -3,12 +3,11 @@ namespace Bpjs\Framework\Helpers;
 
 class RateLimiter
 {
-    private $limit = 500; // Jumlah maksimum permintaan
-    private $timeFrame = 3600; // Jangka waktu dalam detik (misalnya 1 jam)
+    private $limit = 500;
+    private $timeFrame = 3600;
     private $requests = [];
 
     public function __construct() {
-        // Inisialisasi jika belum ada data
         if (!isset($_SESSION['requests'])) {
             $_SESSION['requests'] = [];
         }
@@ -21,18 +20,15 @@ class RateLimiter
             $this->requests[$ipAddress] = [];
         }
 
-        // Hapus permintaan yang sudah terlalu lama
         $this->requests[$ipAddress] = array_filter($this->requests[$ipAddress], function($timestamp) use ($now) {
             return ($now - $timestamp) < $this->timeFrame;
         });
 
-        // Cek apakah melebihi batas
         if (count($this->requests[$ipAddress]) >= $this->limit) {
-            return false; // Limit exceeded
+            return false;
         }
 
-        // Catat permintaan baru
         $this->requests[$ipAddress][] = $now;
-        return true; // Limit not exceeded
+        return true;
     }
 }

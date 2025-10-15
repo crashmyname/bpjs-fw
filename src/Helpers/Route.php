@@ -10,10 +10,10 @@ class Route
     private static $routes = [];
     private static $names = [];
     private static $prefix;
-    private static $groupMiddlewares = []; // Menyimpan middleware grup sementara
+    private static $groupMiddlewares = [];
     private static $lastRouteMethod = null;
     private static $lastRouteUri = null;
-    // Inisialisasi routing dengan prefix
+
     public static function init($prefix = '')
     {
         self::$routes['GET'] = [];
@@ -21,7 +21,6 @@ class Route
         self::$prefix = rtrim($prefix, '/');
     }
 
-    // Menambahkan rute GET dengan middleware
     public static function get($uri, $handler, $middlewares = [])
     {
         $middlewares = array_merge(self::$groupMiddlewares, $middlewares);
@@ -36,7 +35,6 @@ class Route
         return new self();
     }
 
-    // Menambahkan rute POST dengan middleware
     public static function post($uri, $handler, $middlewares = [])
     {
         $middlewares = array_merge(self::$groupMiddlewares, $middlewares);
@@ -49,7 +47,6 @@ class Route
         return new self();
     }
 
-    // Menambahkan rute PUT dengan middleware
     public static function put($uri, $handler, $middlewares = [])
     {
         $middlewares = array_merge(self::$groupMiddlewares, $middlewares);
@@ -62,7 +59,6 @@ class Route
         return new self();
     }
 
-    // Menambahkan rute DELETE dengan middleware
     public static function delete($uri, $handler, $middlewares = [])
     {
         $middlewares = array_merge(self::$groupMiddlewares, $middlewares);
@@ -75,50 +71,41 @@ class Route
         return new self();
     }
 
-    // Menambahkan grup middleware ke beberapa rute
     public static function group(array $middlewares, \Closure $routes)
     {
-        // Simpan middleware grup sementara
         self::$groupMiddlewares = $middlewares;
 
-        // Panggil Closure untuk mendefinisikan rute dalam grup
         call_user_func($routes);
 
-        // Reset middleware grup setelah eksekusi
         self::$groupMiddlewares = [];
     }
 
     public static function name($name)
     {
-        // Memeriksa rute untuk GET, POST, PUT, atau DELETE
         foreach (['GET', 'POST', 'PUT', 'DELETE'] as $method) {
             if (!empty(self::$routes[$method])) {
                 $lastRoute = array_key_last(self::$routes[$method]);
                 self::$names[$name] = $lastRoute;
 
-                // Debug log untuk memeriksa nama dan URI yang dipetakan
                 error_log("Route name '{$name}' mapped to URI '{$lastRoute}'");
 
-                return new self(); // Kembali ke chaining
+                return new self();
             }
         }
         ErrorHandler::handleException($name);
     }
 
-    // Mengambil rute berdasarkan nama dan parameter
     public static function route($name, $params = [])
     {
         if (isset(self::$names[$name])) {
             $uri = self::$names[$name];
 
-            // Mengganti parameter {param} di URL dengan nilai dari $params
             foreach ($params as $key => $value) {
                 $uri = str_replace('{' . $key . '}', $value, $uri);
             }
 
-            // Menentukan apakah prefix harus ditambahkan
             if (php_sapi_name() === 'cli-server' || PHP_SAPI === 'cli') {
-                return '/' . trim($uri, '/'); // Tidak menggunakan prefix saat dijalankan dari PHP CLI
+                return '/' . trim($uri, '/');
             }
 
             return self::$prefix . '/' . trim($uri, '/');
@@ -135,7 +122,6 @@ class Route
             throw new \Exception("No route context available for applying limit().");
         }
 
-        // Tambahkan middleware limit ke route tersebut
         $limitMiddleware = function ($request) use ($maxRequests) {
             $request->setRateLimit($maxRequests);
             (new \Middlewares\LimitRequests())->handle($request);
@@ -143,10 +129,9 @@ class Route
 
         self::$routes[$method][$uri]['middlewares'][] = $limitMiddleware;
 
-        return $this; // supaya chaining terus
+        return $this;
     }
 
-    // Dispatch routing
     public static function dispatch(): \Bpjs\Core\Response
     {
         try {
@@ -161,8 +146,8 @@ class Route
             if (self::$prefix && strpos($uri, self::$prefix) === 0) {
                 $uri = substr($uri, strlen(self::$prefix));
             }
-            $uri = '/' . ltrim($uri, '/'); // pastikan selalu diawali '/'
-            if ($uri === '') $uri = '/'; // fallback ke root
+            $uri = '/' . ltrim($uri, '/');
+            if ($uri === '') $uri = '/';
 
 
             $route = self::findRoute($method, $uri);
@@ -174,7 +159,6 @@ class Route
 
                 $request = new \Bpjs\Core\Request();
 
-                // 🔁 Middleware execution
                 foreach ($middlewares as $middleware) {
                     if (is_string($middleware)) {
                         $middlewareInstance = new $middleware();
@@ -186,7 +170,6 @@ class Route
                     }
                 }
 
-                // CSRF check
                 if ($method === 'POST') {
                     $csrfToken = $request->get('csrf_token') ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
                     if (empty($csrfToken) || !isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $csrfToken)) {
@@ -194,7 +177,6 @@ class Route
                     }
                 }
 
-                // 🔁 Controller or closure handler
                 if (is_array($handler) && count($handler) === 2) {
                     [$controller, $method] = $handler;
                     $controllerInstance = new $controller();
@@ -211,7 +193,6 @@ class Route
                     $result = call_user_func_array($handler, $params);
                 }
 
-                // 🔁 Wrap hasil ke Response
                 if ($result instanceof \Bpjs\Core\Response) {
                     return $result;
                 }
@@ -219,7 +200,6 @@ class Route
                 return new \Bpjs\Core\Response($result);
             }
 
-            // Not found
             ob_start();
             include BPJS_BASE_PATH . '/app/handle/errors/404.php';
             $content = ob_get_clean();
@@ -230,33 +210,27 @@ class Route
         }
     }
 
-    // Mencari rute berdasarkan metode dan URI
     private static function findRoute($method, $uri)
     {
         foreach (self::$routes[$method] as $routeUri => $route) {
-            // Mencocokkan URI dengan parameter
             $routePattern = preg_replace('/\{[a-zA-Z0-9_]+\}/', '([a-zA-Z0-9_\-]+)', $routeUri);
             if (preg_match('#^' . $routePattern . '$#', $uri, $matches)) {
-                // Ambil parameter dari URI
-                array_shift($matches); // Hapus elemen pertama yang merupakan keseluruhan URI yang dicocokkan
-                $route['params'] = $matches; // Tambahkan parameter ke route
+                array_shift($matches);
+                $route['params'] = $matches;
                 return $route;
             }
         }
-        return null; // Tidak ada rute yang ditemukan
+        return null;
     }
 
-    // Cek apakah route ada
     private static function routeExists($uri)
     {
         return isset(self::$routes['GET'][$uri]) || isset(self::$routes['POST'][$uri]);
     }
 
-    // Fungsi untuk menampilkan halaman error
     private static function renderErrorPage($message)
     {
-        // Pastikan tidak ada output lain yang dikirim sebelum HTML error ditampilkan
-        ob_clean(); // Membersihkan output buffer, jika ada yang terkirim sebelumnya
+        ob_clean();
         header('Content-Type: text/html; charset=utf-8');
         $url = base_url();
         echo "
@@ -312,6 +286,6 @@ class Route
         </body>
         </html>
     ";
-        exit(); // Menghentikan eksekusi skrip setelah error page ditampilkan
+        exit();
     }
 }

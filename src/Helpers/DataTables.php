@@ -5,7 +5,7 @@ class DataTables
 {
     private $data;
     private $columns;
-    private $additionalData = []; // Tambahan untuk menyimpan data tambahan
+    private $additionalData = [];
 
     public static function of(array $data)
     {
@@ -16,7 +16,6 @@ class DataTables
     {
         $this->data = $data;
 
-        // Cek apakah data pertama adalah array atau objek
         if (!empty($data)) {
             if (is_array($data[0])) {
                 $this->columns = array_keys($data[0]);
@@ -28,7 +27,6 @@ class DataTables
         }
     }
 
-    // Tambahkan fungsi with untuk menambahkan data tambahan
     public function with(array $data)
     {
         $this->additionalData = array_merge($this->additionalData, $data);
@@ -69,7 +67,6 @@ class DataTables
         $totalFiltered = count($filteredData);
         $filteredData = array_slice($filteredData, $start, $length);
 
-        // Tambahkan data tambahan ke dalam respons
         $response = array_merge([
             'draw' => $draw,
             'recordsTotal' => $totalRecords,

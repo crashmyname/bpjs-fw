@@ -22,16 +22,24 @@ class CORSMiddleware
             exit();
         }
 
-        // Izinkan metode HTTP tertentu
+        /** 
+         * Izinkan metode HTTP tertentu
+        */ 
         header("Access-Control-Allow-Methods: ". implode(',',config('cors.allowed_methods')));
 
-        // Izinkan header tertentu
+        /** 
+         * Izinkan header tertentu
+         */
         header("Access-Control-Allow-Headers: ". implode(',',config('cors.allowed_headers')));
 
-        // Izinkan penggunaan credentials (seperti cookies)
+        /**
+        * Izinkan penggunaan credentials (seperti cookies)
+        */
         header("Access-Control-Allow-Credentials: ". (config('cors.allowed_credentials') ? 'true' : 'false'));
 
-        // Untuk permintaan OPTIONS (pre-flight), kirim respons 200 dan hentikan eksekusi skrip
+        /** 
+         * Untuk permintaan OPTIONS (pre-flight), kirim respons 200 dan hentikan eksekusi skrip 
+        */
         if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
             header("HTTP/1.1 200 OK");
             exit();

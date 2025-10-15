@@ -6,7 +6,6 @@ class Date{
     protected $time;
 
     public function __construct() {
-        // Atur zona waktu ke Jakarta
         date_default_timezone_set('Asia/Jakarta');
     }
 

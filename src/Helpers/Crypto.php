@@ -17,21 +17,17 @@ class Crypto
     {
         $method = 'AES-256-CBC';
         $key = hash('sha256', env('CRYPTO_KEY'), true);
-        
-        // Decode data dari URL-safe Base64
+
         $decodedData = self::base64UrlDecode($data);
-        
-        // Memisahkan data terenkripsi dan IV
+
         $parts = explode('::', $decodedData, 2);
         
         if (count($parts) !== 2) {
-            // Jika tidak ada dua bagian, berarti data tidak valid
-            return false; // atau throw exception sesuai kebutuhan
+            return false;
         }
         
         list($encrypted_data, $iv) = $parts;
         
-        // Dekripsi data
         return openssl_decrypt($encrypted_data, $method, $key, 0, hex2bin($iv));
     }
 
@@ -42,7 +38,7 @@ class Crypto
 
     private static function base64UrlDecode($data)
     {
-        $data .= str_repeat('=', (4 - strlen($data) % 4) % 4); // Tambahkan padding jika perlu
+        $data .= str_repeat('=', (4 - strlen($data) % 4) % 4);
         return base64_decode(strtr($data, '-_', '+/'));
     }
 }
