@@ -184,26 +184,32 @@ class BaseController {
         return $flattened;
     }
 
-    function base_url(): string
+    function base_url(string $path = ''): string
     {
-        $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+        $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            ? 'https://'
+            : 'http://';
+    
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-
-        $documentRoot = $_SERVER['DOCUMENT_ROOT'] ?? null;
-        $physicalBasePath = BPJS_BASE_PATH;
-
-        if ($documentRoot) {
-            $documentRoot = realpath($documentRoot);
-            $relativePath = str_replace('\\', '/', str_replace($documentRoot, '', $physicalBasePath));
-            $relativePath = '/' . trim($relativePath, '/');
-        } else {
-            $relativePath = '/' . trim(basename($physicalBasePath), '/');
+    
+        $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+    
+        $dir = str_replace('\\', '/', dirname($scriptName));
+        if ($dir === '/' || $dir === '\\') {
+            $dir = '';
         }
-        if ($relativePath === '/') {
-            $relativePath = '';
+    
+        $url = $protocol . $host . $dir;
+    
+        if (!str_ends_with($url, '/')) {
+            $url .= '/';
         }
-
-        return $protocol . $host . $relativePath . '/';
+    
+        if ($path !== '') {
+            $url .= ltrim($path, '/');
+        }
+    
+        return $url;
     }
 
     public function arrayGet($array, $key, $default)
@@ -442,13 +448,14 @@ class BaseController {
 
     public function view($view, $data = [], $layout = null)
     {
-        // setSecurityHeaders();
-        try{
+        try {
             extract($data);
+
             $viewPath = BPJS_BASE_PATH . '/resources/views/' . $view . '.php';
             if (!file_exists($viewPath)) {
                 throw new \Exception("View file not found: $viewPath");
             }
+
             ob_start();
             include $viewPath;
             $content = ob_get_clean();
@@ -456,19 +463,47 @@ class BaseController {
             if ($layout) {
                 $layoutPath = BPJS_BASE_PATH . '/resources/views/' . $layout . '.php';
                 if (file_exists($layoutPath)) {
+                    ob_start();
                     include $layoutPath;
+                    $finalOutput = ob_get_clean();
+                    echo $finalOutput;
                 } else {
+                    if (env('APP_DEBUG') == 'false') {
+                        if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                            header('Content-Type: application/json', true, 500);
+                            echo json_encode([
+                                'statusCode' => 500,
+                                'error'      => 'Internal Server Error'
+                            ]);
+                        } else {
+                            return View::error(500);
+                        }
+                        exit;
+                    }
                     throw new \Exception("Layout file not found: $layoutPath");
                 }
             } else {
                 echo $content;
             }
-        } catch (\Exception $e){
-            if (!headers_sent()) { 
+        } catch (\Throwable $e) {
+            if (!headers_sent()) {
                 http_response_code(500);
+            }
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
             }
             ErrorHandler::handleException($e);
         }
+
         exit();
     }
 }
