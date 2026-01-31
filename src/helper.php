@@ -1,6 +1,8 @@
 <?php
-use Bpjs\Framework\Helpers\Route;
-use Bpjs\Framework\Helpers\BaseController;
+use App\Models\User;
+use Helpers\Route;
+use Helpers\BaseController;
+use Helpers\Session;
 function asset($path)
 {
     $baseURL = isset($_SERVER['HTTPS']) ? 'https://' : 'http://';
@@ -8,6 +10,21 @@ function asset($path)
     $baseURL .= $_SERVER['HTTP_HOST'] . $baseDir;
 
     return $baseURL . 'public/' . $path;
+}
+
+function asset_v(string $path): string
+{
+    $path = ltrim($path, '/');
+
+    $publicPath = rtrim($_SERVER['DOCUMENT_ROOT'], '/')
+                . '/public/'
+                . $path;
+
+    if (is_file($publicPath)) {
+        return asset($path) . '?v=' . filemtime($publicPath);
+    }
+
+    return asset($path);
 }
 
 function module($path)
@@ -314,13 +331,21 @@ function setTime()
     date_default_timezone_set('Asia/Jakarta');
 }
 
+function auth()
+{
+    $id = Session::user()->userId;
+    return User::find($id);
+}
+
 function storeFile($file, $targetDirectory)
 {
+    // Cek apakah ada file yang diunggah
     if ($file['error'] === UPLOAD_ERR_OK) {
         $tmpName = $file['tmp_name'];
         $originalName = basename($file['name']);
         $targetPath = rtrim($targetDirectory, '/') . '/' . $originalName;
 
+        // Pindahkan file dari lokasi sementara ke tujuan
         if (move_uploaded_file($tmpName, $targetPath)) {
             return ['status' => 'success', 'message' => 'File berhasil diunggah.', 'path' => $targetPath];
         } else {
@@ -355,9 +380,11 @@ if (!function_exists('public_path')) {
 if (!function_exists('storage_path')) {
     function storage_path($path = '')
     {
-        return rtrim(BPJS_BASE_PATH . '/storage/public/' . ltrim($path, '/'), DIRECTORY_SEPARATOR);
+        $base = BPJS_BASE_PATH . '/storage/public/';
+        return rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim($path, '/');
     }
 }
+
 
 function storage($path)
 {
@@ -448,11 +475,13 @@ function env($key, $default = null)
             $env = [];
         }
 
+        // Set ke $_ENV untuk kompatibilitas jika diperlukan
         foreach ($env as $envKey => $envValue) {
             $_ENV[$envKey] = $envValue;
         }
     }
 
+    // Ambil nilai berdasarkan key
     return array_key_exists($key, $env) ? $env[$key] : $default;
 }
 
@@ -460,6 +489,7 @@ function config(string $key, $default = null)
 {
     static $configs = [];
 
+    // Cek apakah key valid, minimal harus ada satu titik
     if (!str_contains($key, '.')) {
         return $default;
     }
@@ -494,4 +524,31 @@ function app_base_path(): string {
 
 function url($params){
     return base_url().$params;
+}
+
+if (!function_exists('cookie_set')) {
+    function cookie_set($name, $value, $minutes = 1440, $httpOnly = true, $secure = false, $sameSite = 'Lax') {
+        $expire = time() + ($minutes * 60);
+        setcookie($name, $value, [
+            'expires' => $expire,
+            'path' => '/',
+            'domain' => '',
+            'secure' => $secure,
+            'httponly' => $httpOnly,
+            'samesite' => ucfirst($sameSite),
+        ]);
+    }
+}
+
+if (!function_exists('cookie_get')) {
+    function cookie_get($name) {
+        return $_COOKIE[$name] ?? null;
+    }
+}
+
+if (!function_exists('cookie_delete')) {
+    function cookie_delete($name) {
+        setcookie($name, '', time() - 3600, '/');
+        unset($_COOKIE[$name]);
+    }
 }

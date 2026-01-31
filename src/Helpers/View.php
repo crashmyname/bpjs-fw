@@ -34,11 +34,17 @@ class View
                     include $layoutPath;
                 } else {
                     throw new \Exception("Layout file not found: $layoutPath");
+                    // View::render('errors/500');
                 }
             } else {
                 echo $content;
             }
         } catch (\Exception $e){
+            // self::renderError($e);
+            if (!headers_sent()) { 
+                http_response_code(500);
+            }
+            // self::renderError($e);
             ErrorHandler::handleException($e);
         }
         exit();
@@ -63,6 +69,7 @@ class View
                 throw new \Exception("Layout file not found: $layoutPath");
             }
 
+            // Layouts bisa akses variabel $content
             ob_start();
             include $layoutPath;
             return ob_get_clean();
@@ -89,11 +96,17 @@ class View
                     include $layoutPath;
                 } else {
                     throw new \Exception("Layout file not found: $layoutPath");
+                    // View::render('errors/500');
                 }
             } else {
                 echo $content;
             }
         } catch (\Exception $e){
+            // self::renderError($e);
+            if (!headers_sent()) { 
+                http_response_code(500);
+            }
+            // self::renderError($e);
             ErrorHandler::handleException($e);
         }
         exit();
@@ -101,11 +114,36 @@ class View
 
     public static function redirectTo($route, $flashData = [])
     {
+        // Store flash data in session
         if (!empty($flashData)) {
             $_SESSION['flash_data'] = $flashData;
         }
         $fullroute = base_url() . $route;
         header("Location: $fullroute");
+        exit();
+    }
+
+    public static function renderError($exception)
+    {
+        static $errorDisplayed = false;
+
+        if (!$errorDisplayed) {
+            $errorDisplayed = true;
+
+            // Set response code menjadi 500
+            if (!headers_sent()) { 
+                http_response_code(500);
+            }
+
+            // Tampilkan halaman error
+            $exceptionData = [
+                'message' => $exception->getMessage(),
+                'file' => $exception->getFile(),
+                'line' => $exception->getLine(),
+            ];
+            extract($exceptionData);
+            include BPJS_BASE_PATH . '/app/handle/errors/view_404.php';
+        }
         exit();
     }
 
@@ -125,12 +163,12 @@ class View
             if (!file_exists($layoutPath)) {
                 throw new \Exception("Layout file not found: $layoutPath");
             }
-
+            // inject $content into layout
             ob_start();
             include $layoutPath;
-            return ob_get_clean();
+            return ob_get_clean(); // return full HTML
         }
 
-        return $content;
+        return $content; // return plain view
     }
 }

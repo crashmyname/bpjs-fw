@@ -59,7 +59,8 @@ class BaseController {
             }
         </style>
         ';
-
+        
+        // Tambahkan JavaScript untuk collapsible functionality
         echo '
         <script>
             document.addEventListener("DOMContentLoaded", function() {
@@ -78,10 +79,12 @@ class BaseController {
             });
         </script>
         ';
-
+        
+        // Fungsi rekursif untuk memformat data
         function format_data($data) {
             $result = '';
-
+    
+            // Cek tipe data sebelum foreach
             if (is_array($data) || is_object($data)) {
                 foreach ($data as $key => $value) {
                     $result .= '<span class="key">[' . htmlspecialchars($key) . ']</span> => ';
@@ -101,6 +104,7 @@ class BaseController {
                     }
                 }
             } else {
+                // Jika bukan array/object, tampilkan langsung
                 if (is_string($data)) {
                     $result .= '<span class="string">"' . htmlspecialchars($data) . '"</span><br>';
                 } elseif (is_numeric($data)) {
@@ -115,7 +119,9 @@ class BaseController {
             return $result;
         }
     
+        // Cek tipe data utama
         if (is_object($data)) {
+            // Menggunakan refleksi jika data adalah objek
             $reflection = new ReflectionClass($data);
             $properties = $reflection->getProperties();
             $formatted_data = [];
@@ -124,9 +130,11 @@ class BaseController {
                 $formatted_data[$property->getName()] = $property->getValue($data);
             }
         } else {
+            // Jika data adalah array atau tipe sederhana lainnya
             $formatted_data = $data;
         }
-
+    
+        // Tampilkan hasil yang sudah diformat
         echo '<div class="pretty-print">';
         echo format_data($formatted_data);
         echo '</div>';
@@ -259,7 +267,7 @@ class BaseController {
         $currentAttempts = $_SESSION[$key] ?? 0;
     
         if ($currentAttempts >= $maxAttempts) {
-            return false;
+            return false; // Terlalu banyak percobaan
         }
     
         $_SESSION[$key] = $currentAttempts + 1;
@@ -448,14 +456,25 @@ class BaseController {
 
     public function view($view, $data = [], $layout = null)
     {
-        try {
+        // setSecurityHeaders();
+        try{
             extract($data);
-
             $viewPath = BPJS_BASE_PATH . '/resources/views/' . $view . '.php';
             if (!file_exists($viewPath)) {
+                if (env('APP_DEBUG') == 'false') {
+                    if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                        header('Content-Type: application/json', true, 500);
+                        echo json_encode([
+                            'statusCode' => 500,
+                            'error'      => 'Internal Server Error'
+                        ]);
+                    } else {
+                        return View::error(500);
+                    }
+                    exit;
+                }
                 throw new \Exception("View file not found: $viewPath");
             }
-
             ob_start();
             include $viewPath;
             $content = ob_get_clean();
@@ -465,8 +484,8 @@ class BaseController {
                 if (file_exists($layoutPath)) {
                     ob_start();
                     include $layoutPath;
-                    $finalOutput = ob_get_clean();
-                    echo $finalOutput;
+                    $layoutContent = ob_get_clean();
+                    echo $layoutContent;
                 } else {
                     if (env('APP_DEBUG') == 'false') {
                         if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
@@ -485,8 +504,8 @@ class BaseController {
             } else {
                 echo $content;
             }
-        } catch (\Throwable $e) {
-            if (!headers_sent()) {
+        } catch (\Exception $e){
+            if (!headers_sent()) { 
                 http_response_code(500);
             }
             if (env('APP_DEBUG') == 'false') {
@@ -501,9 +520,9 @@ class BaseController {
                 }
                 exit;
             }
+            // View::renderError($e);
             ErrorHandler::handleException($e);
         }
-
         exit();
     }
 }

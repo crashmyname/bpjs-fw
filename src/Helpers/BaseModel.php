@@ -1,12 +1,12 @@
 <?php
 
-namespace Helpers;
+namespace Bpjs\Framework\Helpers;
 
 use Bpjs\Core\Request;
 use PDO;
 use PDOException;
-use Helpers\Database;
-use Helpers\DB;
+use Bpjs\Framework\Helpers\Database;
+use Bpjs\Framework\Helpers\DB;
 
 class BaseModel
 {
@@ -135,16 +135,38 @@ class BaseModel
 
     public function where($column, $operator = '=', $value = null)
     {
+        if ($column instanceof \Closure) {
+            $subQuery = new static();
+            $column($subQuery);
+
+            if (!empty($subQuery->whereConditions) || !empty($subQuery->orWhereConditions)) {
+                $parts = [];
+                
+                if (!empty($subQuery->whereConditions)) {
+                    $parts[] = implode(' AND ', $subQuery->whereConditions);
+                }
+
+                if (!empty($subQuery->orWhereConditions)) {
+                    $parts[] = implode(' OR ', $subQuery->orWhereConditions);
+                }
+
+                $combined = implode(' OR ', array_filter($parts));
+                
+                if (!empty($combined)) {
+                    $this->whereConditions[] = '(' . $combined . ')';
+                    $this->whereParams = array_merge($this->whereParams, $subQuery->whereParams);
+                }
+            }
+            return $this;
+        }
+
         if (strtoupper($operator) === 'LIKE') {
             $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
             $this->whereConditions[] = "{$column} LIKE :{$paramName}";
             $this->whereParams[":{$paramName}"] = $value;
         } elseif ($value === null || $value == '') {
-            if ($operator === '=') {
-                $operator = 'IS';
-            } elseif ($operator === '!=') {
-                $operator = 'IS NOT';
-            }
+            if ($operator === '=') $operator = 'IS';
+            elseif ($operator === '!=') $operator = 'IS NOT';
             $this->whereConditions[] = "{$column} {$operator} NULL";
         } else {
             $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
@@ -188,12 +210,31 @@ class BaseModel
 
     public function orWhere($column, $operator = '=', $value = null)
     {
-        if ($value === null || $value == '') {
-            if ($operator === '=') {
-                $operator = 'IS';
-            } elseif ($operator === '!=') {
-                $operator = 'IS NOT';
+        // 🔹 Jika pakai closure
+        if ($column instanceof \Closure) {
+            $subQuery = new static();
+            $column($subQuery);
+
+            $group = [];
+            if (!empty($subQuery->whereConditions)) {
+                $group[] = '(' . implode(' AND ', $subQuery->whereConditions) . ')';
             }
+            if (!empty($subQuery->orWhereConditions)) {
+                $group[] = '(' . implode(' OR ', $subQuery->orWhereConditions) . ')';
+            }
+
+            if (!empty($group)) {
+                $this->orWhereConditions[] = '(' . implode(' AND ', $group) . ')';
+                $this->whereParams = array_merge($this->whereParams, $subQuery->whereParams);
+            }
+
+            return $this;
+        }
+
+        // 🔹 Default lama
+        if ($value === null || $value == '') {
+            if ($operator === '=') $operator = 'IS';
+            elseif ($operator === '!=') $operator = 'IS NOT';
             $this->orWhereConditions[] = "{$column} {$operator} NULL";
         } else {
             $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
@@ -233,6 +274,15 @@ class BaseModel
         $this->whereParams[":{$paramStart}"] = $start;
         $this->whereParams[":{$paramEnd}"] = $end;
 
+        return $this;
+    }
+
+    public function whereRaw($rawSql, array $bindings = [])
+    {
+        $this->whereConditions[] = "({$rawSql})";
+        foreach ($bindings as $key => $val) {
+            $this->whereParams[$key] = $val;
+        }
         return $this;
     }
 
@@ -791,6 +841,45 @@ class BaseModel
         }
     }
 
+    public static function updateOrCreate(array $conditions, array $attributes)
+    {
+        try {
+            $query = static::query();
+            foreach ($conditions as $field => $value) {
+                $query->where($field, '=', $value);
+            }
+
+            $instance = $query->first();
+
+            if ($instance) {
+                foreach ($attributes as $key => $value) {
+                    $instance->$key = $value;
+                }
+                $instance->save();
+                return $instance;
+            }
+
+            $data = array_merge($conditions, $attributes);
+            return static::create($data);
+
+        } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
+            ErrorHandler::handleException($e);
+            return null;
+        }
+    }
+
     public function saveWithRelations(array $relations = [])
     {
         $this->save();
@@ -833,6 +922,61 @@ class BaseModel
         return $this;
     }
 
+    public static function insertBatch(array $rows)
+    {
+        if (empty($rows)) {
+            return false;
+        }
+
+        try {
+            $instance = new static();
+            $connection = DB::getConnection();
+            $table = self::$dynamicTable ?? $instance->table ?? 'default_table';
+
+            $columns = array_keys($rows[0]);
+            $columnList = implode(',', array_map(fn($col) => "`$col`", $columns));
+
+            $placeholderRow = '(' . implode(',', array_fill(0, count($columns), '?')) . ')';
+            $placeholders = implode(',', array_fill(0, count($rows), $placeholderRow));
+
+            $values = [];
+            foreach ($rows as $row) {
+                foreach ($columns as $col) {
+                    $values[] = $row[$col];
+                }
+            }
+
+            $sql = "INSERT INTO `{$table}` ({$columnList}) VALUES {$placeholders}";
+
+            // Cek apakah sudah dalam transaksi
+            $inTransaction = $connection->inTransaction();
+
+            if (!$inTransaction) {
+                $connection->beginTransaction();
+            }
+
+            $stmt = $connection->prepare($sql);
+            $stmt->execute($values);
+
+            if (!$inTransaction) {
+                $connection->commit();
+            }
+
+            $firstId = $connection->lastInsertId();
+
+            return [
+                'first_id' => $firstId,
+                'total_inserted' => count($rows),
+            ];
+        } catch (\Exception $e) {
+            if ($connection->inTransaction()) {
+                $connection->rollBack();
+            }
+            ErrorHandler::handleException($e);
+            return false;
+        }
+    }
+
     public function update($data)
     {
         $this->connection = DB::getConnection();
@@ -863,6 +1007,137 @@ class BaseModel
             $stmt = $this->connection->prepare($sql);
             $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
             $stmt->execute();
+        } catch (\Exception $e) {
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
+            ErrorHandler::handleException($e);
+        }
+    }
+
+    public static function deleteWhere(array $conditions): bool
+    {
+        try {
+            $instance = new static;
+            $table = self::$dynamicTable ?? $instance->table;
+
+            $where = [];
+            $params = [];
+
+            foreach ($conditions as $field => $value) {
+                $where[] = "{$field} = :{$field}";
+                $params[$field] = $value;
+            }
+
+            $sql = "DELETE FROM {$table} WHERE " . implode(' AND ', $where);
+            $stmt = $instance->connection->prepare($sql);
+
+            foreach ($params as $key => $val) {
+                $stmt->bindValue(':' . $key, $val);
+            }
+
+            return $stmt->execute();
+        } catch (\Exception $e) {
+            ErrorHandler::handleException($e);
+            return false;
+        }
+    }
+
+    public function deleteWithRelations(array $relations = [])
+    {
+        try {
+            $this->connection = DB::getConnection();
+            $table = self::$dynamicTable ?? $this->table;
+
+            $relationsToDelete = !empty($relations) ? $relations : array_keys($this->relations);
+            $localPrimaryValue = $this->attributes[$this->primaryKey] ?? null;
+
+            foreach ($relationsToDelete as $relationName) {
+                if (!method_exists($this, $relationName)) {
+                    continue;
+                }
+
+                $relationInfo = $this->$relationName();
+                if (!is_array($relationInfo) || empty($relationInfo['model'])) {
+                    continue;
+                }
+
+                $relatedModel = $relationInfo['model'];
+                if (is_object($relatedModel)) {
+                    $relatedClass = get_class($relatedModel);
+                } else {
+                    $relatedClass = $relatedModel;
+                }
+
+                $foreignKey = $relationInfo['foreignKey'] ?? null;
+                $localKey = $relationInfo['localKey'] ?? $relationInfo['ownerKey'] ?? $this->primaryKey;
+
+                $localValue = $this->attributes[$localKey] ?? $localPrimaryValue;
+
+                if ($localValue === null) {
+                    continue;
+                }
+
+                switch ($relationInfo['type']) {
+                    case 'hasOne':
+                        $relatedTable = (new $relatedClass())->table ?? (new $relatedClass())->getTableName() ?? null;
+                        if (!$relatedTable && property_exists($relatedClass, 'table')) {
+                            $relatedTable = $relatedClass::$table;
+                        }
+
+                        if ($relatedTable && $foreignKey) {
+                            $sql = "DELETE FROM {$relatedTable} WHERE {$foreignKey} = :val";
+                            $stmt = $this->connection->prepare($sql);
+                            $stmt->bindValue(':val', $localValue);
+                            $stmt->execute();
+                        }
+                        break;
+
+                    case 'hasMany':
+                        $relatedTable = (new $relatedClass())->table ?? (new $relatedClass())->getTableName() ?? null;
+                        if (!$relatedTable && property_exists($relatedClass, 'table')) {
+                            $relatedTable = $relatedClass::$table;
+                        }
+
+                        if ($relatedTable && $foreignKey) {
+                            $sql = "DELETE FROM {$relatedTable} WHERE {$foreignKey} = :val";
+                            $stmt = $this->connection->prepare($sql);
+                            $stmt->bindValue(':val', $localValue);
+                            $stmt->execute();
+                        }
+                        break;
+
+                    case 'belongsTo':
+                        // kalo dibutuhkan dan ingin cascade, uncomment dan sesuaikan saja ya genksssss anjay mabar:
+                        /*
+                        $owner = $this->relations[$relationName] ?? null;
+                        if ($owner && method_exists($owner, 'deleteWithRelations')) {
+                            $owner->deleteWithRelations();
+                        } elseif ($owner && method_exists($owner, 'delete')) {
+                            $owner->delete();
+                        }
+                        */
+                        break;
+                }
+            }
+
+            if (isset($this->attributes[$this->primaryKey])) {
+                $sql = "DELETE FROM {$table} WHERE {$this->primaryKey} = :pk";
+                $stmt = $this->connection->prepare($sql);
+                $stmt->bindValue(':pk', $this->attributes[$this->primaryKey]);
+                $stmt->execute();
+            }
+
+            return true;
         } catch (\Exception $e) {
             if (env('APP_DEBUG') == 'false') {
                 if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {

@@ -5,7 +5,9 @@ use Bpjs\Framework\Helpers\View;
 class AuthMiddleware
 {
     public function handle() {
+        // Pengecekan login
         if (!$this->checkLogin()) {
+            // include __DIR__ . '/../../app/Handle/errors/401.php';
             View::redirectTo('login');
             exit();
         }
@@ -32,7 +34,7 @@ class AuthMiddleware
             session_unset();
             session_destroy();
             if(!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest'){
-                http_response_code(401);
+                http_response_code(401); // Unauthorized
                 exit;
             } elseif (!empty($_SERVER['HTTP_HX_REQUEST']) && $_SERVER['HTTP_HX_REQUEST'] === 'true'){
                 header('HX-Redirect: '.base_url().'login');

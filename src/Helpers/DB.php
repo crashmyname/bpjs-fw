@@ -185,9 +185,9 @@ class DB
             $stmt->execute($params);
             return $stmt->fetchAll($fetchStyle);
         } catch (PDOException $e) {
+            // Tangani error dengan lebih baik
             error_log("Database Query Error: " . $e->getMessage());
-            ErrorHandler::handleException($e);
-            return [];
+            return []; // Mengembalikan array kosong jika error
         }
     }
 
@@ -200,9 +200,9 @@ class DB
             $stmt->execute($params);
             return $stmt->fetchAll($fetchStyle);
         } catch (PDOException $e) {
+            // Tangani error dan log jika perlu
             error_log("Database Query Error: " . $e->getMessage());
-            ErrorHandler::handleException($e);
-            return [];
+            return []; // Mengembalikan array kosong jika terjadi error
         }
     }
 
@@ -241,19 +241,36 @@ class DB
         return self::query($sql, $params)->fetchAll($fetchStyle);
     }
 
-    /** 
-     * Fetch satu data
-    */
+    // Fetch satu data
     public static function fetch($sql, $params = [], $fetchStyle = PDO::FETCH_OBJ)
     {
         return self::query($sql, $params)->fetch($fetchStyle);
     }
 
-    /** 
-     * Menghitung hasil query
-     * */ 
+    // Menghitung hasil query
     public static function count($sql, $params = [])
     {
         return self::query($sql, $params)->rowCount();
+    }
+
+    // Menangani error
+    public static function renderError($exception)
+    {
+        static $errorDisplayed = false;
+
+        if (!$errorDisplayed) {
+            $errorDisplayed = true;
+            if (!headers_sent()) {
+                http_response_code(500);
+            }
+            $exceptionData = [
+                'message' => $exception->getMessage(),
+                'file' => $exception->getFile(),
+                'line' => $exception->getLine(),
+            ];
+            extract($exceptionData);
+            include __DIR__ . '/../../app/handle/errors/page_error.php';
+        }
+        exit();
     }
 }

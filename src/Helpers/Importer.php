@@ -1,5 +1,5 @@
 <?php
-namespace Helpers;
+namespace Bpjs\Framework\Helpers;
 
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Exception;

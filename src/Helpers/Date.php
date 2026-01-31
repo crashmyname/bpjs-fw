@@ -6,12 +6,13 @@ class Date{
     protected $time;
 
     public function __construct() {
+        // Atur zona waktu ke Jakarta
         date_default_timezone_set('Asia/Jakarta');
     }
 
     protected static function zone() {
-        $zone = env('TIMEZONE');
-        return date_default_timezone_set($zone);
+        $zone = env('TIMEZONE','Asia/Jakarta');
+        date_default_timezone_set($zone);
     }
     
     public static function Now()
@@ -44,7 +45,13 @@ class Date{
 
     public static function parse($parameter)
     {
-        $time = is_numeric($parameter) ? $parameter : strtotime($parameter);
+        self::zone();
+        $time = is_numeric($parameter) ? (int) $parameter : strtotime($parameter);
+
+        if ($time === false) {
+            throw new \Exception("Format tanggal tidak dikenali: $parameter");
+        }
+
         $instance = new self();
         $instance->time = $time;
         return $instance;
@@ -52,7 +59,8 @@ class Date{
 
     public function format($format)
     {
-        return date($format,self::zone());
+        self::zone();
+        return date($format, $this->time);
     }
 
     public function startOfDay()

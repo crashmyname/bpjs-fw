@@ -13,7 +13,9 @@ class Bpjs
         'make:migration' => 'createMigration',
         'db:migrate' => 'runMigrations',
         'db:rollback' => 'rollbackMigration',
+        'generate:key' => 'generateKey',
         'serve' => 'Serve',
+        // Tambahkan perintah lainnya di sini
     ];
 
     public function run($argv)
@@ -22,6 +24,7 @@ class Bpjs
         $argument = $argv[2] ?? null;
         $options = array_slice($argv, 3);
 
+        // Cek apakah perintah dikenali
         if ($command && isset($this->commands[$command])) {
             $method = $this->commands[$command];
             $this->$method($argument, $options);
@@ -54,6 +57,10 @@ class Bpjs
         }
         $serviceTemplate = "<?php\n\nnamespace App\Services;\nuse Helpers\Validator;\n\nclass $name\n{\n    // Service logic here\n}\n";
         $filePath = "app/Services/{$name}.php";
+        $dir = "app/Services/";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
         if (file_exists($filePath)) {
             echo "Service $name sudah ada!\n";
         } else {
@@ -68,8 +75,12 @@ class Bpjs
             echo "Nama import harus diberikan!\n";
             return;
         }
-        $modalTemplate = "<?php\n\nnamespace App\Import;\n\nclass $name\n{\n    // Import logic here\n}\n";
+        $modalTemplate = "<?php\n\nnamespace App\Import;\n\nuse Bpjs\Framework\Helpers\Importer\n\nclass $name extends\n{\n    // Import logic here\n}\n";
         $filePath = "app/Import/{$name}.php";
+        $dir = "app/Import/";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
         if(file_exists($filePath)){
             echo "Import $name sudah ada!\n";
         } else {
@@ -86,6 +97,10 @@ class Bpjs
         }
         $modalTemplate = "<?php\n\nnamespace App\Export;\n\nclass $name\n{\n    // Export logic here\n}\n";
         $filePath = "app/Export/{$name}.php";
+        $dir = "app/Export/";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
         if(file_exists($filePath)){
             echo "Export $name sudah ada!\n";
         } else {
@@ -101,6 +116,7 @@ class Bpjs
             return;
         }
 
+        // Pisahkan namespace dan nama file
         $pathParts = explode('/', $name);
         $className = array_pop($pathParts);
         $namespace = 'App\\Controllers';
@@ -109,6 +125,7 @@ class Bpjs
         }
         $directory = 'app/Controllers/' . implode('/', $pathParts);
 
+        // Pastikan folder target ada
         if (!is_dir($directory)) {
             mkdir($directory, 0777, true); // Buat folder secara rekursif
         }
@@ -147,15 +164,18 @@ class Bpjs
         $fileName = "{$timestamp}_{$name}.php";
         $filePath = "database/migrations/{$fileName}";
 
+        // Pastikan direktori ada
         if (!is_dir('database/migrations')) {
             mkdir('database/migrations', 0777, true);
         }
 
-        $table = 'unknown';
+        // Ambil nama tabel dari pola
+        $table = 'unknown'; // default untuk jaga-jaga
         if (preg_match('/create_(.*?)_table/', $fileName, $matches)) {
             $table = $matches[1];
         }
 
+        // Buat nama class berdasarkan input
         $className = str_replace(' ', '', ucwords(str_replace('_', ' ', $name)));
 
         $migrationTemplate = "<?php\n\n";
@@ -255,8 +275,10 @@ class Bpjs
     {
         $name = pathinfo($file, PATHINFO_FILENAME);
 
+        // Hapus bagian timestamp: 2025_06_30_131244_
         $name = preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', $name);
 
+        // Ubah ke CamelCase class name
         return str_replace(' ', '', ucwords(str_replace('_', ' ', $name)));
     }
 
@@ -265,6 +287,7 @@ class Bpjs
         $logPath = 'database/migrations/.migrated.json';
         $migrated = file_exists($logPath) ? json_decode(file_get_contents($logPath), true) : [];
 
+        // Hapus dulu jika sudah ada (untuk menggantikan versi lama)
         $migrated = array_filter($migrated, fn($f) => $f !== $file);
 
         $migrated[] = $file;
@@ -331,6 +354,26 @@ class Bpjs
         }
     }
 
+    protected function generateKey()
+    {
+        $newKey = base64_encode(random_bytes(32));
+        $envPath = BPJS_BASE_PATH . '/.env';
+
+        if(!file_exists($envPath)){
+            file_put_contents($envPath,"APP_KEY={$newKey}\n");
+            echo ".env created with new APP_KEY";
+        } else {
+            $env = file_get_contents($envPath);
+            if(strpos($env,'APP_KEY=') === false){
+                $env .= "\nAPP_KEY={$newKey}\n";
+            } else {
+                $env = preg_replace('/APP_KEY=.*/', "APP_KEY={$newKey}", $env);
+            }
+            file_put_contents($envPath, $env);
+            echo "APP_KEY generate successfully";
+        }
+    }
+
     protected function Serve()
     {
         $host = '127.0.0.1';
@@ -347,12 +390,13 @@ class Bpjs
         }
         if (!filter_var($host, FILTER_VALIDATE_IP)) {
             echo "Error: Invalid host address provided: $host\n";
-            exit(1);
+            exit(1); // Exit with error
         }
 
+        // Validate port (must be numeric and within range)
         if (!is_numeric($port) || (int) $port < 1024 || (int) $port > 65535) {
             echo "Error: Invalid port number provided: $port\n";
-            exit(1);
+            exit(1); // Exit with error
         }
 
         echo "Starting development server on http://{$host}:{$port}\n";

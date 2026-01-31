@@ -2,7 +2,7 @@
 namespace Bpjs\Framework\Helpers;
 
 use Bpjs\Core\Request;
-use Bpjs\Framework\Helpers\View;
+use Helpers\View;
 use Middlewares\SessionMiddleware;
 
 class Route
@@ -10,7 +10,7 @@ class Route
     private static $routes = [];
     private static $names = [];
     private static $prefix;
-    private static $groupMiddlewares = [];
+    private static $groupMiddlewares = []; 
     private static $lastRouteMethod = null;
     private static $lastRouteUri = null;
 
@@ -18,6 +18,8 @@ class Route
     {
         self::$routes['GET'] = [];
         self::$routes['POST'] = [];
+        self::$routes['PUT'] = [];
+        self::$routes['DELETE'] = [];
         self::$prefix = rtrim($prefix, '/');
     }
 
@@ -74,25 +76,40 @@ class Route
     public static function group(array $middlewares, \Closure $routes)
     {
         self::$groupMiddlewares = $middlewares;
-
         call_user_func($routes);
-
         self::$groupMiddlewares = [];
     }
 
     public static function name($name)
     {
-        foreach (['GET', 'POST', 'PUT', 'DELETE'] as $method) {
-            if (!empty(self::$routes[$method])) {
-                $lastRoute = array_key_last(self::$routes[$method]);
-                self::$names[$name] = $lastRoute;
-
-                error_log("Route name '{$name}' mapped to URI '{$lastRoute}'");
-
-                return new self();
-            }
+        if (self::$lastRouteMethod && self::$lastRouteUri) {
+            self::$names[$name] = self::$lastRouteUri;
+            error_log("✅ Route name '{$name}' mapped to URI '" . self::$lastRouteUri . "'");
+            return new self();
         }
+
+        if (env('APP_DEBUG') == 'false') {
+            if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                header('Content-Type: application/json', true, 500);
+                echo json_encode([
+                    'statusCode' => 500,
+                    'error'      => 'Internal Server Error'
+                ]);
+            } else {
+                return View::error(500);
+            }
+            exit;
+        }
+
         ErrorHandler::handleException($name);
+    }
+
+    public static function prefix(string $prefix, \Closure $routes)
+    {
+        $previousPrefix = self::$prefix;
+        self::$prefix = rtrim($previousPrefix . '/' . trim($prefix, '/'), '/');
+        call_user_func($routes);
+        self::$prefix = $previousPrefix;
     }
 
     public static function route($name, $params = [])
@@ -104,13 +121,25 @@ class Route
                 $uri = str_replace('{' . $key . '}', $value, $uri);
             }
 
-            if (php_sapi_name() === 'cli-server' || PHP_SAPI === 'cli') {
-                return '/' . trim($uri, '/');
-            }
+            $baseUrl = rtrim(env('APP_URL', ''), '/');
 
-            return self::$prefix . '/' . trim($uri, '/');
+            return $baseUrl . '/' . trim($uri, '/');
         }
-        ErrorHandler::handleException($name);
+
+        if (env('APP_DEBUG') == 'false') {
+            if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                header('Content-Type: application/json', true, 500);
+                echo json_encode([
+                    'statusCode' => 500,
+                    'error'      => 'Internal Server Error'
+                ]);
+            } else {
+                return View::error(500);
+            }
+            exit;
+        }
+
+        self::renderErrorPage("Route dengan nama '{$name}' tidak ditemukan.");
     }
 
     public function limit(int $maxRequests)
@@ -206,7 +235,23 @@ class Route
             return new \Bpjs\Core\Response($content, 404);
 
         } catch (\Throwable $e) {
-            ErrorHandler::handleException($e);
+            if (env('APP_DEBUG') == 'false') {
+                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
+                    header('Content-Type: application/json', true, 500);
+                    echo json_encode([
+                        'statusCode' => 500,
+                        'error'      => 'Internal Server Error'
+                    ]);
+                } else {
+                    return View::error(500);
+                }
+                exit;
+            }
+            ob_start();
+            $error = $e;
+            include BPJS_BASE_PATH . '/app/handle/errors/500.php';
+            $content = ob_get_clean();
+            return new \Bpjs\Core\Response($content, 500);
         }
     }
 

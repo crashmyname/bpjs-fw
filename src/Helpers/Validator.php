@@ -27,26 +27,43 @@ class Validator {
     public function validate($data, $rules) {
         foreach ($rules as $field => $rule) {
             $ruleSet = explode('|', $rule);
+            $value = $data[$field] ?? null;
+
             foreach ($ruleSet as $r) {
                 $ruleName = $r;
                 $parameter = null;
 
                 if (strpos($r, ':') !== false) {
-                    list($ruleName, $parameter) = explode(':', $r);
+                    [$ruleName, $parameter] = explode(':', $r, 2);
                 }
 
                 $method = 'validate' . ucfirst($ruleName);
 
                 if (method_exists($this, $method)) {
-                    $this->$method($field, $data[$field] ?? null, $parameter);
+                    $this->$method($field, $value, $parameter);
+                    if ($ruleName === 'required' && isset($this->errors[$field])) {
+                        break;
+                    }
                 }
             }
         }
     }
 
     protected function validateRequired($field, $value, $param = null) {
-        if (is_null($value) || $value === '') {
-            $this->errors[$field][] = $this->getMessage($field, 'required', "$field is required.");
+
+        // FILE UPLOAD
+        if (is_array($value) && isset($value['error'])) {
+            if ($value['error'] === UPLOAD_ERR_NO_FILE) {
+                $this->errors[$field][] =
+                    $this->getMessage($field, 'required', "$field is required.");
+            }
+            return;
+        }
+
+        // STRING / NUMBER
+        if ($value === null || $value === '') {
+            $this->errors[$field][] =
+                $this->getMessage($field, 'required', "$field is required.");
         }
     }
 
@@ -115,54 +132,144 @@ class Validator {
         }
     }
 
-    protected function validateImage($field, $file, $params = null) {
+    protected function validateFile($field, $file, $params = null)
+    {
         $allowedTypes = [];
+        $allowedExts = [];
+        $maxSize = null;
+
+        if (is_string($params)) {
+            $rules = explode('|', $params);
+            foreach ($rules as $rule) {
+                if (str_contains($rule, '/')) {
+                    $mimes = explode(',', $rule);
+                    foreach ($mimes as $mime) {
+                        $allowedTypes[] = trim($mime);
+                        $allowedExts[] = explode('/', trim($mime))[1] ?? trim($mime);
+                    }
+                } elseif (str_starts_with($rule, 'ext:')) {
+                    $allowedExts = array_map('trim', explode(',', str_replace('ext:', '', $rule)));
+                } elseif (str_starts_with($rule, 'max:')) {
+                    $maxSize = (int) str_replace('max:', '', $rule); // ukuran dalam KB
+                }
+            }
+        }
+
+        if (!isset($file['tmp_name']) || $file['error'] === 4) {
+            $this->errors[$field][] = $this->getMessage($field, 'required', "$field is required.");
+            return;
+        }
+
+        if (!is_uploaded_file($file['tmp_name'])) {
+            $this->errors[$field][] = $this->getMessage($field, 'file', "$field upload is invalid.");
+            return;
+        }
+
+        if ($maxSize !== null && $file['size'] > $maxSize * 1024) {
+            $this->errors[$field][] = $this->getMessage($field, 'filesize', "$field must not exceed {$maxSize}KB.");
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+
+        if (!empty($allowedTypes) && !in_array($mimeType, $allowedTypes)) {
+            $this->errors[$field][] = $this->getMessage($field, 'filetype', "$field must be one of: " . implode(', ', $allowedTypes));
+        }
+
+        if (!empty($allowedExts) && !in_array($ext, $allowedExts)) {
+            $this->errors[$field][] = $this->getMessage($field, 'extension', "$field file extension must be one of: " . implode(', ', $allowedExts));
+        }
+    }
+
+    protected function validateImage($field, $file, $params = null)
+    {
+        $allowedTypes = [];
+        $allowedExts = [];
         $maxSize = null;
         $minWidth = null;
         $minHeight = null;
 
         if (is_string($params)) {
-            $parts = explode(',', $params);
-            $allowedTypes = array_map('trim', $parts);
+            $rules = explode('|', $params);
+            foreach ($rules as $rule) {
+                if (str_contains($rule, 'image/')) {
+                    $mimes = explode(',', $rule);
+                    foreach ($mimes as $mime) {
+                        $allowedTypes[] = trim($mime);
+                        $allowedExts[] = explode('/', trim($mime))[1];
+                    }
+                } elseif (str_starts_with($rule, 'max:')) {
+                    $maxSize = (int) str_replace('max:', '', $rule); // ukuran dalam KB
+                } elseif (str_starts_with($rule, 'minWidth:')) {
+                    $minWidth = (int) str_replace('minWidth:', '', $rule);
+                } elseif (str_starts_with($rule, 'minHeight:')) {
+                    $minHeight = (int) str_replace('minHeight:', '', $rule);
+                }
+            }
         }
 
-        if (!isset($file['tmp_name']) || $file['tmp_name'] === '' || $file['error'] === 4) {
-            $this->errors[$field][] = $this->getMessage(
-                $field,
-                'required',
-                "$field is required."
-            );
+        if (!is_array($file) || $file['error'] !== UPLOAD_ERR_OK) {
             return;
         }
 
-        if ($maxSize !== null) {
-            $this->validateFileSize($field, $file, $maxSize);
+        if (!is_uploaded_file($file['tmp_name'])) {
+            $this->errors[$field][] = $this->getMessage($field, 'file', "$field upload is invalid.");
+            return;
+        }
+
+        if ($maxSize !== null && $file['size'] > $maxSize * 1024) {
+            $this->errors[$field][] = $this->getMessage(
+                $field,
+                'filesize',
+                "$field must not exceed {$maxSize}KB."
+            );
         }
 
         if (!empty($allowedTypes)) {
-            $this->validateFileType($field, $file, $allowedTypes);
+            $this->validateFileType($field, $file, $allowedTypes, $allowedExts);
         }
 
         if ($minWidth !== null || $minHeight !== null) {
-            $imageInfo = getimagesize($file['tmp_name']);
+            $imageInfo = @getimagesize($file['tmp_name']);
             if ($imageInfo) {
-                list($width, $height) = $imageInfo;
-                if ($minWidth !== null && $width < $minWidth) {
-                    $this->errors[$field][] = $this->getMessage($field, 'image', "$field must be at least $minWidth pixels wide.", ['minWidth' => $minWidth]);
+                [$width, $height] = $imageInfo;
+                if ($minWidth && $width < $minWidth) {
+                    $this->errors[$field][] = "$field width must be at least {$minWidth}px.";
                 }
-                if ($minHeight !== null && $height < $minHeight) {
-                    $this->errors[$field][] = $this->getMessage($field, 'image', "$field must be at least $minHeight pixels tall.", ['minHeight' => $minHeight]);
+                if ($minHeight && $height < $minHeight) {
+                    $this->errors[$field][] = "$field height must be at least {$minHeight}px.";
                 }
             } else {
-                $this->errors[$field][] = $this->getMessage($field, 'image', "$field must be a valid image.");
+                $this->errors[$field][] = "$field must be a valid image file.";
             }
         }
     }
 
-    protected function validateFileType($field, $file, $allowedTypes) {
-        $fileType = mime_content_type($file['tmp_name']);
-        if (!in_array($fileType, $allowedTypes)) {
-            $this->errors[$field][] = $this->getMessage($field, 'filetype', "$field must be one of the following types: " . implode(', ', $allowedTypes) . ".", ['types' => implode(', ', $allowedTypes)]);
+    protected function validateFileType($field, $file, $allowedTypes, $allowedExts)
+    {
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+
+        if (!in_array($mimeType, $allowedTypes)) {
+            $this->errors[$field][] = $this->getMessage(
+                $field,
+                'filetype',
+                "$field must be one of the following MIME types: " . implode(', ', $allowedTypes) . "."
+            );
+        }
+
+        if (!in_array($ext, $allowedExts)) {
+            $this->errors[$field][] = $this->getMessage(
+                $field,
+                'extension',
+                "$field file extension must be one of: " . implode(', ', $allowedExts) . "."
+            );
         }
     }
 
