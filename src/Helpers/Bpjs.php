@@ -8,6 +8,8 @@ class Bpjs
         'make:model' => 'createModel',
         'make:controller' => 'createController',
         'make:service' => 'createService',
+        'make:DTO' => 'createDTO',
+        'make:Repo' => 'createRepo',
         'make:import' => 'createImport',
         'make:export' => 'createExport',
         'make:migration' => 'createMigration',
@@ -39,7 +41,7 @@ class Bpjs
             echo "Nama model harus diberikan!\n";
             return;
         }
-        $modelTemplate = "<?php\n\nnamespace App\Models;\nuse Helpers\BaseModel;\n\nclass $name extends BaseModel\n{\n    // Model logic here\n}\n";
+        $modelTemplate = "<?php\n\nnamespace App\Models;\nuse Bpjs\Framework\Helpers\BaseModel;\n\nclass $name extends BaseModel\n{\n    // Model logic here\n}\n";
         $filePath = "app/Models/{$name}.php";
         if (file_exists($filePath)) {
             echo "Model $name sudah ada!\n";
@@ -55,7 +57,7 @@ class Bpjs
             echo "Nama Service harus diberikan!\n";
             return;
         }
-        $serviceTemplate = "<?php\n\nnamespace App\Services;\nuse Helpers\Validator;\n\nclass $name\n{\n    // Service logic here\n}\n";
+        $serviceTemplate = "<?php\n\nnamespace App\Services;\nuse Bpjs\Framework\Helpers\Validator;\n\nclass $name\n{\n    // Service logic here\n}\n";
         $filePath = "app/Services/{$name}.php";
         $dir = "app/Services/";
         if (!is_dir($dir)) {
@@ -69,13 +71,53 @@ class Bpjs
         }
     }
 
+    protected function createDTO($name)
+    {
+        if (!$name) {
+            echo "Nama DTO harus diberikan!\n";
+            return;
+        }
+        $dtoTemplate = "<?php\n\nnamespace App\DTO;\n\nclass $name\n{\n    // DTO here\n}\n";
+        $filePath = "app/DTO/{$name}.php";
+        $dir = "app/DTO/";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
+        if (file_exists($filePath)) {
+            echo "DTO $name sudah ada!\n";
+        } else {
+            file_put_contents($filePath, $dtoTemplate);
+            echo "DTO $name berhasil dibuat!\n";
+        }
+    }
+
+    protected function createRepo($name)
+    {
+        if (!$name) {
+            echo "Nama Repository harus diberikan!\n";
+            return;
+        }
+        $repoTemplate = "<?php\n\nnamespace App\Repository;\n\nclass $name\n{\n    // Repository here\n}\n";
+        $filePath = "app/Repository/{$name}.php";
+        $dir = "app/Repository/";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
+        if (file_exists($filePath)) {
+            echo "Repo $name sudah ada!\n";
+        } else {
+            file_put_contents($filePath, $repoTemplate);
+            echo "Repo $name berhasil dibuat!\n";
+        }
+    }
+
     protected function createImport($name)
     {
         if(!$name){
             echo "Nama import harus diberikan!\n";
             return;
         }
-        $modalTemplate = "<?php\n\nnamespace App\Import;\n\nuse Bpjs\Framework\Helpers\Importer\n\nclass $name extends\n{\n    // Import logic here\n}\n";
+        $modalTemplate = "<?php\n\nnamespace App\Import;\n\nuse Bpjs\Framework\Helpers\Importer\n\nclass $name extends Importer\n{\n    // Import logic here\n}\n";
         $filePath = "app/Import/{$name}.php";
         $dir = "app/Import/";
         if (!is_dir($dir)) {
@@ -131,7 +173,7 @@ class Bpjs
         }
 
         $isResource = in_array('--resource', $options);
-        $controllerTemplate = "<?php\n\nnamespace {$namespace};\n\nuse Helpers\BaseController;\nuse Bpjs\Core\Request;\nuse Helpers\Validator;\nuse Helpers\View;\nuse Helpers\CSRFToken;\n\nclass {$className} extends BaseController\n{\n";
+        $controllerTemplate = "<?php\n\nnamespace {$namespace};\n\nuse Bpjs\Framework\Helpers\BaseController;\nuse Bpjs\Core\Request;\nuse Bpjs\Framework\Helpers\Validator;\nuse Bpjs\Framework\Helpers\View;\nuse Bpjs\Framework\Helpers\CSRFToken;\n\nclass {$className} extends BaseController\n{\n";
         if ($isResource) {
             $controllerTemplate .= "    public function index()\n    {\n        // Tampilkan semua resource\n    }\n\n";
             $controllerTemplate .= "    public function show(\$id)\n    {\n        // Tampilkan resource dengan ID: \$id\n    }\n\n";
@@ -180,7 +222,7 @@ class Bpjs
 
         $migrationTemplate = "<?php\n\n";
         $migrationTemplate .= "\n";
-        $migrationTemplate .= "use Helpers\\SchemaBuilder;\n\n";
+        $migrationTemplate .= "use Bpjs\Framework\Helpers\\SchemaBuilder;\n\n";
         $migrationTemplate .= "class {$className}\n";
         $migrationTemplate .= "{\n";
         $migrationTemplate .= "    public function up(\PDO \$pdo)\n";
@@ -192,9 +234,9 @@ class Bpjs
         $migrationTemplate .= "        \$sql = \$table->buildCreateSQL();\n";
         $migrationTemplate .= "        try {\n";
         $migrationTemplate .= "             \$pdo->exec(\$sql);\n";
-        $migrationTemplate .= "             echo \"✅ Table '{$table}' berhasil dibuat\\n\";\n";
+        $migrationTemplate .= "             echo \"Table '{$table}' berhasil dibuat\\n\";\n";
         $migrationTemplate .= "        } catch (\PDOException \$e) {\n";
-        $migrationTemplate .= "             echo \"❌ Gagal membuat tabel: \"" . ".\$e->getMessage().\"\\n\";\n";
+        $migrationTemplate .= "             echo \"Gagal membuat tabel: \"" . ".\$e->getMessage().\"\\n\";\n";
         $migrationTemplate .= "             echo \"SQL:\".\$sql;\n";
         $migrationTemplate .= "        }\n";
         $migrationTemplate .= "    }\n\n";
@@ -235,20 +277,20 @@ class Bpjs
                 $className = $this->getClassNameFromFile($file);
 
                 if (!class_exists($className)) {
-                    echo "❌ Class $className tidak ditemukan dalam $file\n";
+                    echo "Class $className tidak ditemukan dalam $file\n";
                     continue;
                 }
 
                 $migration = new $className();
 
                 if (in_array($file, $migrated)) {
-                    echo "⚠️  Migration $file sudah pernah dijalankan. Melakukan rollback...\n";
+                    echo "Migration $file sudah pernah dijalankan. Melakukan rollback...\n";
                     if (method_exists($migration, 'down')) {
                         try {
                             $migration->down($pdo);
-                            echo "🔁 Rollback migration $file berhasil.\n";
+                            echo "Rollback migration $file berhasil.\n";
                         } catch (\PDOException $e) {
-                            echo "❌ Gagal rollback migration $file: " . $e->getMessage() . "\n";
+                            echo "Gagal rollback migration $file: " . $e->getMessage() . "\n";
                             continue;
                         }
                     } else {
@@ -258,13 +300,13 @@ class Bpjs
                 }
 
                 if (method_exists($migration, 'up')) {
-                    echo "⏳ Menjalankan migration: $className\n";
+                    echo "Menjalankan migration: $className\n";
                     try {
                         $migration->up($pdo);
                         $this->logMigration($file);
-                        echo "✅ Migration $file berhasil dijalankan.\n";
+                        echo "Migration $file berhasil dijalankan.\n";
                     } catch (\PDOException $e) {
-                        echo "❌ Error pada migration $file: " . $e->getMessage() . "\n";
+                        echo "Error pada migration $file: " . $e->getMessage() . "\n";
                     }
                 }
             }
@@ -323,7 +365,7 @@ class Bpjs
     {
         $migrated = $this->getMigrationLog();
         if (empty($migrated)) {
-            echo "❌ Tidak ada migrasi yang bisa di-rollback.\n";
+            echo "Tidak ada migrasi yang bisa di-rollback.\n";
             return;
         }
 
@@ -345,7 +387,7 @@ class Bpjs
             if (method_exists($migration, 'down')) {
                 $migration->down($pdo);
                 $this->removeLastMigration();
-                echo "✅ Rollback $lastFile berhasil.\n";
+                echo "Rollback $lastFile berhasil.\n";
             } else {
                 echo "Method down() tidak ditemukan di $className.\n";
             }
