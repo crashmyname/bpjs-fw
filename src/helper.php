@@ -1,8 +1,10 @@
 <?php
 use App\Models\User;
-use Helpers\Route;
-use Helpers\BaseController;
-use Helpers\Session;
+use Bpjs\Framework\Helpers\Live\LiveRenderer;
+use Bpjs\Framework\Helpers\Session\SessionManager;
+use Bpjs\Framework\Helpers\Route;
+use Bpjs\Framework\Helpers\BaseController;
+use Bpjs\Framework\Helpers\Session;
 function asset($path)
 {
     $baseURL = isset($_SERVER['HTTPS']) ? 'https://' : 'http://';
@@ -550,5 +552,33 @@ if (!function_exists('cookie_delete')) {
     function cookie_delete($name) {
         setcookie($name, '', time() - 3600, '/');
         unset($_COOKIE[$name]);
+    }
+}
+
+function live(string $component, array $props = [])
+{
+    return LiveRenderer::mount($component, $props);
+}
+
+if (!function_exists('session')) {
+    function session($key = null, $default = null)
+    {
+        static $session;
+
+        if (!$session) {
+            $session = new SessionManager();
+        }
+        if ($key === null) {
+            return $session;
+        }
+
+        if (is_array($key)) {
+            foreach ($key as $k => $v) {
+                $session->put($k, $v);
+            }
+            return null;
+        }
+
+        return $session->get($key, $default);
     }
 }
