@@ -20,6 +20,7 @@ class ErrorHandler
 
     public static function handleException(Throwable $exception)
     {
+        self::clearOutputBuffers();
         self::logError(
             $exception->getMessage(),
             $exception->getFile(),
@@ -36,6 +37,7 @@ class ErrorHandler
 
     public static function handleError($errno, $errstr, $errfile, $errline)
     {
+        self::clearOutputBuffers();
         self::logError($errstr, $errfile, $errline);
 
         if (env('APP_DEBUG') === 'true') {
@@ -49,15 +51,41 @@ class ErrorHandler
     public static function handleShutdown()
     {
         $error = error_get_last();
-        if ($error && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR])) {
-            self::logError($error['message'], $error['file'], $error['line']);
-            if (env('APP_DEBUG') === 'true') {
-                $exception = new \ErrorException($error['message'], 0, $error['type'], $error['file'], $error['line']);
-                self::renderWithWhoops($exception);
-            } else {
-                self::renderErrorPage($error['message']);
-            }
+
+        if (!$error) {
+            return;
         }
+
+        if (!in_array($error['type'], [
+            E_ERROR,
+            E_CORE_ERROR,
+            E_COMPILE_ERROR,
+            E_RECOVERABLE_ERROR
+        ])) {
+            return;
+        }
+
+        self::clearOutputBuffers();
+
+        self::logError(
+            $error['message'],
+            $error['file'],
+            $error['line']
+        );
+
+        $exception = new \ErrorException(
+            $error['message'],
+            0,
+            $error['type'],
+            $error['file'],
+            $error['line']
+        );
+
+        if (env('APP_DEBUG') === 'true') {
+            self::renderWithWhoops($exception);
+        }
+
+        self::renderErrorPage($error['message']);
     }
 
     /** Simpan ke log file */
@@ -124,5 +152,12 @@ class ErrorHandler
     public static function addAdditionalData($key, $value)
     {
         self::$additionalData[$key] = $value;
+    }
+
+    private static function clearOutputBuffers(): void
+    {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
     }
 }

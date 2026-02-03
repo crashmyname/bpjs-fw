@@ -77,18 +77,40 @@ class Bpjs
             echo "Nama DTO harus diberikan!\n";
             return;
         }
-        $dtoTemplate = "<?php\n\nnamespace App\DTO;\n\nclass $name\n{\n    // DTO here\n}\n";
-        $filePath = "app/DTO/{$name}.php";
-        $dir = "app/DTO/";
-        if (!is_dir($dir)) {
-            mkdir($dir, 0777, true);
+        $name = trim($name, '/');
+        $parts = explode('/', $name);
+        $className = array_pop($parts);
+        $subNamespace = implode('\\', $parts);
+
+        $namespace = 'App\\DTO' . ($subNamespace ? '\\' . $subNamespace : '');
+        $dirPath = 'app/DTO/' . implode('/', $parts);
+
+        if (!is_dir($dirPath)) {
+            mkdir($dirPath, 0777, true);
         }
+
+        $filePath = $dirPath . '/' . $className . '.php';
+
         if (file_exists($filePath)) {
-            echo "DTO $name sudah ada!\n";
-        } else {
-            file_put_contents($filePath, $dtoTemplate);
-            echo "DTO $name berhasil dibuat!\n";
+            echo "DTO {$className} sudah ada!\n";
+            return;
         }
+
+        $dtoTemplate = <<<PHP
+            <?php
+
+            namespace {$namespace};
+
+            final class {$className}
+            {
+                // DTO here
+            }
+
+            PHP;
+
+        file_put_contents($filePath, $dtoTemplate);
+
+        echo "DTO {$namespace}\\{$className} berhasil dibuat!\n";
     }
 
     protected function createRepo($name)

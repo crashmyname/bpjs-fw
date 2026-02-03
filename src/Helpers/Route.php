@@ -208,16 +208,29 @@ class Route
 
                 if (is_array($handler) && count($handler) === 2) {
                     [$controller, $method] = $handler;
-                    $controllerInstance = new $controller();
+                    $container = new \Bpjs\Core\Container();
+                    $controllerInstance = $container->make($controller);
 
                     $reflection = new \ReflectionMethod($controllerInstance, $method);
-                    $parameters = $reflection->getParameters();
+                    $methodParams = [];
 
-                    if (isset($parameters[0]) && $parameters[0]->getType()?->getName() === \Bpjs\Core\Request::class) {
-                        array_unshift($params, $request);
+                    foreach ($reflection->getParameters() as $param) {
+                        $type = $param->getType();
+
+                        if ($type) {
+                            $className = $type->getName();
+
+                            if ($className === \Bpjs\Core\Request::class) {
+                                $methodParams[] = $request;
+                            } else {
+                                $methodParams[] = $container->make($className);
+                            }
+                        } else {
+                            $methodParams[] = array_shift($params);
+                        }
                     }
 
-                    $result = call_user_func_array([$controllerInstance, $method], $params);
+                    $result = $reflection->invokeArgs($controllerInstance, $methodParams);
                 } else {
                     $result = call_user_func_array($handler, $params);
                 }
@@ -235,23 +248,25 @@ class Route
             return new \Bpjs\Core\Response($content, 404);
 
         } catch (\Throwable $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
+            if (env('APP_DEBUG') === 'true') {
+                throw $e;
             }
-            ob_start();
-            $error = $e;
-            include BPJS_BASE_PATH . '/app/handle/errors/500.php';
-            $content = ob_get_clean();
-            return new \Bpjs\Core\Response($content, 500);
+
+            if (
+                Request::isAjax() ||
+                (isset($_SERVER['HTTP_ACCEPT']) && str_contains($_SERVER['HTTP_ACCEPT'], 'application/json'))
+            ) {
+                return new \Bpjs\Core\Response(
+                    json_encode([
+                        'statusCode' => 500,
+                        'error' => 'Internal Server Error'
+                    ]),
+                    500,
+                    ['Content-Type' => 'application/json']
+                );
+            }
+
+            return View::error(500);
         }
     }
 
