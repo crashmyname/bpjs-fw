@@ -1,5 +1,6 @@
 <?php
 use App\Models\User;
+use Bpjs\Core\Cache;
 use Bpjs\Framework\Helpers\Live\LiveRenderer;
 use Bpjs\Framework\Helpers\Session\SessionManager;
 use Bpjs\Framework\Helpers\Route;
@@ -491,9 +492,15 @@ function config(string $key, $default = null)
 {
     static $configs = [];
 
-    // Cek apakah key valid, minimal harus ada satu titik
     if (!str_contains($key, '.')) {
-        return $default;
+
+        if (!isset($configs[$key])) {
+            $pathToFile = BPJS_BASE_PATH . "/config/{$key}.php";
+            if (!file_exists($pathToFile)) return $default;
+            $configs[$key] = require $pathToFile;
+        }
+
+        return $configs[$key];
     }
 
     [$file, $path] = explode('.', $key, 2);
@@ -581,4 +588,9 @@ if (!function_exists('session')) {
 
         return $session->get($key, $default);
     }
+}
+
+function cache(): string
+{
+    return Cache::class;
 }

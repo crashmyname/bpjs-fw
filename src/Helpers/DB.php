@@ -146,8 +146,12 @@ class DB
     // Mendapatkan satu baris hasil query
     public function first($fetchStyle = PDO::FETCH_OBJ)
     {
+        $start = microtime(true);
         $stmt = self::getConnection()->prepare($this->query . ' LIMIT 1');
         $stmt->execute($this->params);
+        $duration = round((microtime(true) - $start) * 1000, 2);
+
+        QueryLogger::add($this->query, $this->params, $duration, 'DB::table');
         return $stmt->fetch($fetchStyle);
     }
 
@@ -181,8 +185,12 @@ class DB
     public static function raw($query, $params = [], $fetchStyle = PDO::FETCH_OBJ)
     {
         try {
+            $start = microtime(true);
             $stmt = self::getConnection()->prepare($query);
             $stmt->execute($params);
+            $duration = round((microtime(true) - $start) * 1000, 2);
+
+            QueryLogger::add($query, $params, $duration, 'DB::table');
             return $stmt->fetchAll($fetchStyle);
         } catch (PDOException $e) {
             // Tangani error dengan lebih baik

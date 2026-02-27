@@ -2,6 +2,7 @@
 namespace Bpjs\Framework\Helpers;
 
 use Bpjs\Core\Request;
+use Exception;
 use Helpers\View;
 use Middlewares\SessionMiddleware;
 
@@ -13,6 +14,8 @@ class Route
     private static $groupMiddlewares = []; 
     private static $lastRouteMethod = null;
     private static $lastRouteUri = null;
+    private static $currentRoute = [];
+
 
     public static function init($prefix = '')
     {
@@ -101,7 +104,7 @@ class Route
             exit;
         }
 
-        ErrorHandler::handleException($name);
+        ErrorHandler::handleException(new \Exception($name));
     }
 
     public static function prefix(string $prefix, \Closure $routes)
@@ -139,7 +142,7 @@ class Route
             exit;
         }
 
-        self::renderErrorPage("Route dengan nama '{$name}' tidak ditemukan.");
+        ErrorHandler::handleException(new \Exception("Route dengan nama '{$name}' tidak ditemukan."));
     }
 
     public function limit(int $maxRequests)
@@ -159,6 +162,11 @@ class Route
         self::$routes[$method][$uri]['middlewares'][] = $limitMiddleware;
 
         return $this;
+    }
+
+    public static function current()
+    {
+        return self::$currentRoute;
     }
 
     public static function dispatch(): \Bpjs\Core\Response
@@ -182,6 +190,12 @@ class Route
             $route = self::findRoute($method, $uri);
 
             if ($route) {
+                self::$currentRoute = [
+                    'method' => $method,
+                    'uri' => $uri,
+                    'handler' => $route['handler'],
+                    'middlewares' => $route['middlewares'] ?? []
+                ];
                 $handler = $route['handler'];
                 $middlewares = $route['middlewares'];
                 $params = $route['params'] ?? [];

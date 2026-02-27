@@ -397,6 +397,7 @@ class BaseModel
                 $sql .= ' OFFSET ' . (int) $this->offset;
             }
 
+            $start = microtime(true);
             $stmt = $this->connection->prepare($sql);
 
             foreach ($this->whereParams as $key => $value) {
@@ -404,6 +405,14 @@ class BaseModel
             }
 
             $stmt->execute();
+            $duration = round((microtime(true) - $start) * 1000, 2);
+
+            QueryLogger::add(
+                $sql,
+                $this->whereParams,
+                $duration,
+                static::class
+            );
 
             if (!$asModel && empty($this->with)) {
                 return $stmt->fetchAll($fetchStyle);
@@ -453,6 +462,37 @@ class BaseModel
         }
 
         return null;
+    }
+
+    public function latest($column = null)
+    {
+        $column = $column ?? $this->primaryKey;
+
+        $this->orderBy[] = $column . ' DESC';
+
+        return $this;
+    }
+
+    public function pluck($column, $key = null)
+    {
+        $clone = clone $this;
+        $clone->select($column);
+
+        $results = $clone->get(PDO::FETCH_ASSOC);
+
+        if ($key === null) {
+            return array_column($results, $column);
+        }
+
+        $output = [];
+
+        foreach ($results as $row) {
+            if (isset($row[$key])) {
+                $output[$row[$key]] = $row[$column];
+            }
+        }
+
+        return $output;
     }
 
     public function getWithRelations($fetchStyle = PDO::FETCH_OBJ)
