@@ -39,11 +39,12 @@ class TablePlus
 
         $host = $_ENV['DB_HOST'] ?? '127.0.0.1';
         $db   = $_ENV['DB_DATABASE'] ?? 'koperasi_stanley';
+        $port   = $_ENV['DB_PORT'] ?? 3306;
         $user = $_ENV['DB_USERNAME'] ?? 'root';
         $pass = $_ENV['DB_PASSWORD'] ?? '';
         $charset = $_ENV['DB_CHARSET'] ?? 'utf8mb4';
 
-        $dsn = "mysql:host={$host};dbname={$db};charset={$charset}";
+        $dsn = "mysql:host={$host};port={$port};dbname={$db};charset={$charset}";
         try {
             $newPdo = new PDO($dsn, $user, $pass, [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,

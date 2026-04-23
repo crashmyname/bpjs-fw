@@ -529,6 +529,15 @@ class BaseController {
         return $url;
     }
 
+    function backend_url(string $path = ''): string
+    {
+        $base = rtrim(env('BACKEND_URL'), '/');
+
+        return $path
+            ? $base . '/' . ltrim($path, '/')
+            : $base;
+    }
+
     public function arrayGet($array, $key, $default)
     {
         return isset($array[$key]) ? $array[$key] : $default;

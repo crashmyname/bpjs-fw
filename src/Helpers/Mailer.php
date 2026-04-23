@@ -15,12 +15,15 @@ class Mailer
 
         // Konfigurasi SMTP dari .env
         $this->mail->isSMTP();
+        $this->mail->SMTPDebug = env('SMTP_DEBUG', 0);
         $this->mail->Host       = env('SMTP_HOST');
         $this->mail->SMTPAuth   = env('SMTP_AUTH', true);
         $this->mail->Username   = env('SMTP_EMAIL');
         $this->mail->Password   = env('SMTP_PASSWORD');
         $this->mail->SMTPSecure = env('SMTP_SECURE', 'tls');
         $this->mail->Port       = env('SMTP_PORT', 587);
+
+        $this->mail->SMTPKeepAlive = true;
 
         // Default sender
         $this->mail->setFrom(env('SMTP_EMAIL'), env('APP_NAME', 'Mailer'));

@@ -82,29 +82,82 @@ class ColumnDefinition
         return $this;
     }
 
-    public function build(): string
+    public function build(string $driver): string
     {
-        $sql = "`{$this->name}` {$this->type}";
+        $name = $this->wrap($this->name, $driver);
+        $type = $this->mapType($this->type, $driver);
 
-        // Secara default NOT NULL kecuali diberi nullable()
-        if ($this->nullable) {
-            $sql .= ' NULL';
-        } else {
-            $sql .= ' NOT NULL';
+        $sql = "{$name} {$type}";
+
+        if (!$this->isSerial($type)) {
+            $sql .= $this->nullable ? ' NULL' : ' NOT NULL';
         }
 
-        if (!empty($this->modifiers)) {
-            $sql .= ' ' . implode(' ', $this->modifiers);
+        foreach ($this->modifiers as $modifier) {
+
+            if ($driver === 'pgsql' && $modifier === 'AUTO_INCREMENT') {
+                continue;
+            }
+
+            if ($driver === 'pgsql' && $modifier === 'PRIMARY KEY') {
+                $sql .= ' PRIMARY KEY';
+                continue;
+            }
+
+            $sql .= " {$modifier}";
         }
 
         if ($this->foreignKey && $this->foreignTable) {
-            $fk = "FOREIGN KEY (`{$this->name}`) REFERENCES `{$this->foreignTable}`(`{$this->foreignKey}`)";
+
+            $fkName = $this->wrap($this->name, $driver);
+            $fkTable = $this->wrap($this->foreignTable, $driver);
+            $fkColumn = $this->wrap($this->foreignKey, $driver);
+
+            $fk = "FOREIGN KEY ({$fkName}) REFERENCES {$fkTable}({$fkColumn})";
+
             if ($this->onDelete) {
                 $fk .= " ON DELETE {$this->onDelete}";
             }
-            return "$sql,\n    $fk";
+
+            return "{$sql},\n    {$fk}";
         }
 
         return $sql;
+    }
+
+    protected function wrap(string $value, string $driver): string
+    {
+        return match ($driver) {
+            'mysql'  => "`$value`",
+            'pgsql'  => "\"$value\"",
+            default  => $value,
+        };
+    }
+
+    protected function mapType(string $type, string $driver): string
+    {
+        if ($driver === 'pgsql') {
+            if (in_array('AUTO_INCREMENT', $this->modifiers)) {
+
+                if (str_contains($type, 'BIGINT')) {
+                    return 'BIGSERIAL';
+                }
+
+                return 'SERIAL';
+            }
+
+            return match (strtoupper($type)) {
+                'DATETIME' => 'TIMESTAMP',
+                'TINYINT(1)' => 'BOOLEAN',
+                default => $type
+            };
+        }
+
+        return $type;
+    }
+
+    protected function isSerial(string $type): bool
+    {
+        return str_contains($type, 'SERIAL');
     }
 }

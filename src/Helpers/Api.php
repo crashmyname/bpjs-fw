@@ -207,6 +207,26 @@ class Api
         }
     }
 
+    public static function export()
+    {
+        return self::$routes;
+    }
+
+    public static function setRoutes($routes)
+    {
+        self::$routes = $routes;
+    }
+
+    public static function exportNames()
+    {
+        return self::$names;
+    }
+
+    public static function setNames($names)
+    {
+        self::$names = $names;
+    }
+
     // Mencari rute berdasarkan metode dan URI
     private static function findRoute($method, $uri)
     {

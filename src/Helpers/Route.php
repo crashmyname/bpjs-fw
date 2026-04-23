@@ -15,6 +15,7 @@ class Route
     private static $lastRouteMethod = null;
     private static $lastRouteUri = null;
     private static $currentRoute = [];
+    private static $reflectionCache = [];
 
 
     public static function init($prefix = '')
@@ -74,6 +75,26 @@ class Route
         self::$lastRouteMethod = 'DELETE';
         self::$lastRouteUri = $uri;
         return new self();
+    }
+
+    public static function export()
+    {
+        return self::$routes;
+    }
+
+    public static function setRoutes($routes)
+    {
+        self::$routes = $routes;
+    }
+
+    public static function exportNames()
+    {
+        return self::$names;
+    }
+
+    public static function setNames($names)
+    {
+        self::$names = $names;
     }
 
     public static function group(array $middlewares, \Closure $routes)
@@ -154,12 +175,10 @@ class Route
             throw new \Exception("No route context available for applying limit().");
         }
 
-        $limitMiddleware = function ($request) use ($maxRequests) {
-            $request->setRateLimit($maxRequests);
-            (new \Middlewares\LimitRequests())->handle($request);
-        };
-
-        self::$routes[$method][$uri]['middlewares'][] = $limitMiddleware;
+        self::$routes[$method][$uri]['middlewares'][] = [
+            'class' => \Bpjs\Framework\Helpers\ThrottleMiddleware::class,
+            'params' => [$maxRequests]
+        ];
 
         return $this;
     }
@@ -186,7 +205,14 @@ class Route
             $uri = '/' . ltrim($uri, '/');
             if ($uri === '') $uri = '/';
 
+            $cacheKey = 'route_' . md5($method . $uri);
 
+            if ($method === 'GET') {
+                $cached = \Bpjs\Core\Cache::get($cacheKey);
+                if ($cached) {
+                    return new \Bpjs\Core\Response($cached);
+                }
+            }
             $route = self::findRoute($method, $uri);
 
             if ($route) {
@@ -203,11 +229,20 @@ class Route
                 $request = new \Bpjs\Core\Request();
 
                 foreach ($middlewares as $middleware) {
-                    if (is_string($middleware)) {
+
+                    if (is_array($middleware)) {
+                        $class = $middleware['class'];
+                        $params = $middleware['params'] ?? [];
+
+                        $reflection = new \ReflectionClass($class);
+                        $instance = $reflection->newInstanceArgs($params);
+
+                        $instance->handle($request);
+
+                    } elseif (is_string($middleware)) {
                         $middlewareInstance = new $middleware();
-                        if (method_exists($middlewareInstance, 'handle')) {
-                            $middlewareInstance->handle($request);
-                        }
+                        $middlewareInstance->handle($request);
+
                     } elseif (is_callable($middleware)) {
                         $middleware($request);
                     }
@@ -225,7 +260,13 @@ class Route
                     $container = new \Bpjs\Core\Container();
                     $controllerInstance = $container->make($controller);
 
-                    $reflection = new \ReflectionMethod($controllerInstance, $method);
+                    $key = $controller . '@' . $method;
+
+                    if (!isset(self::$reflectionCache[$key])) {
+                        self::$reflectionCache[$key] = new \ReflectionMethod($controllerInstance, $method);
+                    }
+
+                    $reflection = self::$reflectionCache[$key];
                     $methodParams = [];
 
                     foreach ($reflection->getParameters() as $param) {
@@ -253,7 +294,15 @@ class Route
                     return $result;
                 }
 
-                return new \Bpjs\Core\Response($result);
+                $response = $result instanceof \Bpjs\Core\Response
+                    ? $result
+                    : new \Bpjs\Core\Response($result);
+
+                if ($method === 'GET' && $response->getStatusCode() === 200) {
+                    \Bpjs\Core\Cache::put($cacheKey, $response->getContent(), 60);
+                }
+
+                return $response;
             }
 
             ob_start();

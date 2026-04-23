@@ -1496,6 +1496,11 @@ class BaseModel
         return $data;
     }
 
+    public function getPrimaryKey()
+    {
+        return $this->primaryKey ?? 'id';
+    }
+
     public function __get($key)
     {
         if (array_key_exists($key, $this->relations)) {

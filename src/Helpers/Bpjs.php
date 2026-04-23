@@ -4,6 +4,7 @@ namespace Bpjs\Framework\Helpers;
 class Bpjs
 {
     protected $migrationLogFile = 'database/migrations/.migrated.json';
+    protected bool $running = true;
     protected $commands = [
         'make:model' => 'createModel',
         'make:controller' => 'createController',
@@ -13,10 +14,14 @@ class Bpjs
         'make:import' => 'createImport',
         'make:export' => 'createExport',
         'make:migration' => 'createMigration',
+        'make:job' => 'createJob',
         'db:migrate' => 'runMigrations',
         'db:rollback' => 'rollbackMigration',
         'generate:key' => 'generateKey',
+        'cache:route' => 'cacheRoutes',
+        'cache:clear' => 'clearCache',
         'serve' => 'Serve',
+        'queue:work' => 'queueWork',
         // Tambahkan perintah lainnya di sini
     ];
 
@@ -214,6 +219,53 @@ class Bpjs
         } else {
             file_put_contents($filePath, $controllerTemplate);
             echo "Controller {$name} berhasil dibuat di {$filePath}!\n";
+        }
+    }
+
+    protected function createJob($name)
+    {
+        if (!$name) {
+            echo "Nama Job harus diberikan!\n";
+            return;
+        }
+
+        // Pisahkan folder dan nama class
+        $pathParts = explode('/', $name);
+        $className = array_pop($pathParts);
+
+        // Namespace
+        $namespace = 'App\\Jobs';
+        if (!empty($pathParts)) {
+            $namespace .= '\\' . implode('\\', $pathParts);
+        }
+
+        // Directory
+        $directory = 'app/Jobs/' . implode('/', $pathParts);
+
+        if (!is_dir($directory)) {
+            mkdir($directory, 0777, true);
+        }
+
+        $jobTemplate = "<?php
+
+    namespace {$namespace};
+
+    class {$className}
+    {
+        public function handle(\$data)
+        {
+            // Job logic here
+        }
+    }
+    ";
+
+        $filePath = "{$directory}/{$className}.php";
+
+        if (file_exists($filePath)) {
+            echo "Job {$name} sudah ada!\n";
+        } else {
+            file_put_contents($filePath, $jobTemplate);
+            echo "Job {$name} berhasil dibuat di {$filePath}!\n";
         }
     }
 
@@ -438,6 +490,59 @@ class Bpjs
         }
     }
 
+    protected function cacheRoutes()
+    {
+        echo "Generating route cache...\n";
+
+        require_once BPJS_BASE_PATH . '/vendor/autoload.php';
+
+        $app = require BPJS_BASE_PATH . '/bootstrap/app.php';
+
+        \Bpjs\Framework\Helpers\Route::init('');
+        require BPJS_BASE_PATH . '/routes/web.php';
+
+        \Bpjs\Framework\Helpers\Api::init('/api');
+        require BPJS_BASE_PATH . '/routes/api.php';
+
+        $data = [
+            'web' => \Bpjs\Framework\Helpers\Route::export(),
+            'web_names' => \Bpjs\Framework\Helpers\Route::exportNames(),
+
+            'api' => \Bpjs\Framework\Helpers\Api::export(),
+            'api_names' => \Bpjs\Framework\Helpers\Api::exportNames(),
+        ];
+
+        $path = BPJS_BASE_PATH . '/storage/cache/routes.php';
+
+        if (!is_dir(dirname($path))) {
+            mkdir(dirname($path), 0777, true);
+        }
+
+        file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+
+        echo "Route cache created successfully!\n";
+    }
+
+    protected function clearCache()
+    {
+        $cacheDir = BPJS_BASE_PATH . '/storage/cache';
+
+        if (!is_dir($cacheDir)) {
+            echo "Cache directory not found.\n";
+            return;
+        }
+
+        $files = glob($cacheDir . '/*');
+
+        foreach ($files as $file) {
+            if (is_file($file)) {
+                unlink($file);
+            }
+        }
+
+        echo "Cache cleared successfully!\n";
+    }
+
     protected function Serve()
     {
         $host = '127.0.0.1';
@@ -465,5 +570,119 @@ class Bpjs
 
         echo "Starting development server on http://{$host}:{$port}\n";
         exec("php -S {$host}:{$port}");
+    }
+
+    public function stopWorker()
+    {
+        $this->running = false;
+    }
+
+    protected function queueWork($queue = 'default')
+    {
+        $queues      = explode(',', $queue);
+        $sleep       = env('QUEUE_SLEEP', 2);
+        $maxTries    = env('QUEUE_TRIES', 3);
+        $memoryLimit = env('QUEUE_MEMORY', 128) * 1024 * 1024; // MB
+
+        // Graceful shutdown Linux only
+        if (function_exists('pcntl_async_signals')) {
+            pcntl_async_signals(true);
+
+            pcntl_signal(SIGTERM, fn() => $this->stopWorker());
+            pcntl_signal(SIGINT, fn() => $this->stopWorker());
+        }
+
+        echo "Starting Queue Worker...\n";
+        echo "Listening queues: " . implode(', ', $queues) . "\n";
+
+        while ($this->running) {
+            try {
+                $job = null;
+
+                // cek semua queue satu-satu
+                foreach ($queues as $q) {
+                    $q = trim($q);
+
+                    $job = \Bpjs\Framework\Helpers\Queue::pop($q);
+
+                    if ($job) {
+                        break;
+                    }
+                }
+
+                // kalau tidak ada job
+                if (!$job) {
+                    sleep($sleep);
+                    continue;
+                }
+
+                $start = microtime(true);
+
+                echo "[JOB] Processing ID {$job->id} | Queue: {$job->queue}\n";
+
+                $payload = json_decode($job->payload, true);
+
+                $class  = $payload['job'] ?? null;
+                $data   = $payload['data'] ?? [];
+                $method = $payload['method'] ?? 'handle';
+
+                if (!$class) {
+                    throw new \Exception("Job class empty.");
+                }
+
+                if (!class_exists($class)) {
+                    throw new \Exception("Job class not found: {$class}");
+                }
+
+                $instance = new $class();
+
+                if (!method_exists($instance, $method)) {
+                    throw new \Exception("Method {$method} not found in {$class}");
+                }
+
+                logger("[QUEUE] Running {$class}@{$method}");
+
+
+                call_user_func([$instance, $method], $data);
+
+                \Bpjs\Framework\Helpers\Queue::done($job->id);
+
+                $duration = round(microtime(true) - $start, 3);
+
+                echo "[DONE] Job {$job->id} in {$duration}s\n";
+                logger("[QUEUE] Job {$job->id} done in {$duration}s");
+
+            } catch (\Throwable $e) {
+                if (isset($job) && $job) {
+
+                    if ($job->attempts < $maxTries) {
+                        // release kembali ke pending
+                        \Bpjs\Framework\Helpers\Queue::release($job->id);
+
+                        echo "[RETRY] Job {$job->id} attempt {$job->attempts}\n";
+                        logger("[QUEUE RETRY] Job {$job->id} attempt {$job->attempts}");
+                    } else {
+                        \Bpjs\Framework\Helpers\Queue::fail($job->id);
+
+                        echo "[FAILED] Job {$job->id}\n";
+                        logger("[QUEUE FAILED] Job {$job->id}");
+                    }
+                }
+
+                echo "[ERROR] {$e->getMessage()}\n";
+                logger("[QUEUE ERROR] " . $e->getMessage());
+
+                sleep($sleep);
+            }
+
+            // cek memory leak
+            if (memory_get_usage(true) > $memoryLimit) {
+                echo "[STOP] Memory limit exceeded. Restarting worker...\n";
+                logger("[QUEUE STOP] Memory exceeded");
+                exit;
+            }
+        }
+
+        echo "Worker stopped gracefully.\n";
     }
 }

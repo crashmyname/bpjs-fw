@@ -5,12 +5,44 @@ use Bpjs\Framework\Helpers\ColumnDefinition;
 class SchemaBuilder
 {
     protected string $table;
+    protected string $driver;
     protected array $columns = [];
     protected array $constraints = [];
 
     public function __construct(string $table)
     {
         $this->table = $table;
+        $this->driver = env('DB_CONNECTION', 'mysql');
+    }
+
+    protected function wrap(string $value): string
+    {
+        return match ($this->driver) {
+            'mysql'  => "`$value`",
+            'pgsql'  => "\"$value\"",
+            'sqlsrv' => "[$value]",
+            default  => $value,
+        };
+    }
+
+    protected function mapType(string $type): string
+    {
+        return match ($this->driver) {
+
+            'pgsql' => match ($type) {
+                'INT' => 'INTEGER',
+                'BIGINT AUTO_INCREMENT' => 'BIGSERIAL',
+                'INT AUTO_INCREMENT' => 'SERIAL',
+                'TINYINT(1)' => 'BOOLEAN',
+                'DATETIME' => 'TIMESTAMP',
+                'DOUBLE' => 'DOUBLE PRECISION',
+                'ENUM' => 'VARCHAR',
+                'SET' => 'VARCHAR',
+                default => $type
+            },
+
+            default => $type
+        };
     }
 
     public function index(string|array $columns)
@@ -190,7 +222,7 @@ class SchemaBuilder
         $foreigns = [];
 
         foreach ($this->columns as $col) {
-            $build = $col->build();
+            $build = $col->build($this->driver);
             if (str_contains($build, "FOREIGN KEY")) {
                 [$main, $fk] = explode(",\n    FOREIGN KEY", $build, 2);
                 $columnsSQL[] = $main;
@@ -201,11 +233,13 @@ class SchemaBuilder
         }
 
         $all = array_merge($columnsSQL, $this->constraints, $foreigns);
-        return "CREATE TABLE `{$this->table}` (\n    " . implode(",\n    ", $all) . "\n)";
+        $table = $this->wrap($this->table);
+        return "CREATE TABLE {$table} (\n    " . implode(",\n    ", $all) . "\n)";
     }
 
     public function buildDropSQL(): string
     {
-        return "DROP TABLE IF EXISTS `{$this->table}`";
+        $table = $this->wrap($this->table);
+        return "DROP TABLE IF EXISTS $table";
     }
 }

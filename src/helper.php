@@ -336,8 +336,47 @@ function setTime()
 
 function auth()
 {
-    $id = Session::user()->userId;
-    return User::find($id);
+    return new class {
+        protected $model;
+
+        public function __construct()
+        {
+            $this->model = new \App\Models\User();
+        }
+
+        public function user()
+        {
+            $sessionUser = Session::user();
+
+            if (!$sessionUser) {
+                return null;
+            }
+
+            $pk = $this->model->getPrimaryKey();
+
+            return \App\Models\User::query()
+                ->where($pk, '=', $sessionUser->$pk)
+                ->first();
+        }
+
+        public function id()
+        {
+            $user = $this->user();
+
+            if (!$user) {
+                return null;
+            }
+
+            $pk = $this->model->getPrimaryKey();
+
+            return $user->$pk;
+        }
+
+        public function check()
+        {
+            return $this->user() !== null;
+        }
+    };
 }
 
 function storeFile($file, $targetDirectory)
@@ -418,7 +457,7 @@ function storage_secure(string $filename, int $ttlSeconds = 3600): string
         'exp' => time() + $ttlSeconds
     ]);
 
-    $token = \Helpers\Crypto::encrypt($payload);
+    $token = Bpjs\Framework\Helpers\Crypto::encrypt($payload);
 
     return base_url() . 'file/secure?token=' . urlencode($token);
 }
@@ -431,7 +470,7 @@ function serve_secure_file()
         return new \Bpjs\Core\Response('Missing token', 400);
     }
 
-    $decoded = \Helpers\Crypto::decrypt($token);
+    $decoded = Bpjs\Framework\Helpers\Crypto::decrypt($token);
     if (!$decoded) {
         return new \Bpjs\Core\Response('Invalid token', 403);
     }
@@ -593,4 +632,63 @@ if (!function_exists('session')) {
 function cache(): string
 {
     return Cache::class;
+}
+
+if (!function_exists('logger')) {
+    function logger($message, $context = [])
+    {
+        $logDir = BPJS_BASE_PATH . '/logs';
+
+        if (!is_dir($logDir)) {
+            mkdir($logDir, 0777, true);
+        }
+
+        $date = date('Y-m-d H:i:s');
+
+        if (!empty($context)) {
+            $message .= ' ' . json_encode($context);
+        }
+
+        $formatted = "[{$date}] {$message}" . PHP_EOL;
+
+        file_put_contents(
+            $logDir . '/app-' . date('Y-m-d') . '.log',
+            $formatted,
+            FILE_APPEND
+        );
+    }
+}
+
+function dispatch(string $jobClass, array $data = [], string $queue = 'default')
+{
+    return \Bpjs\Framework\Helpers\Queue::push($jobClass, $data, $queue);
+}
+
+function queue($class, array $data = [], $method = 'handle')
+{
+    $pdo = new PDO(
+        env('DB_CONNECTION','mysql') .
+        ':host=' . env('DB_HOST') .
+        ';port=' . env('DB_PORT',3306) .
+        ';dbname=' . env('DB_DATABASE'),
+        env('DB_USERNAME'),
+        env('DB_PASSWORD')
+    );
+
+    $payload = json_encode([
+        'class' => $class,
+        'method' => $method,
+        'data' => $data
+    ]);
+
+    $stmt = $pdo->prepare("
+        INSERT INTO jobs (queue,payload,status,created_at)
+        VALUES (?,?,?,NOW())
+    ");
+
+    $stmt->execute([
+        'default',
+        $payload,
+        'pending'
+    ]);
 }
