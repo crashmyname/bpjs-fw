@@ -1,6 +1,6 @@
 <?php
 
-namespace Bpjs\Core;
+namespace Bpjs\Framework\Core;
 
 use Bpjs\Framework\Helpers\View;
 
