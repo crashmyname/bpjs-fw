@@ -83,7 +83,7 @@ class Kernel
         return match ($this->dispatcherType) {
             'web' => Route::dispatch(),
             'api' => Api::dispatch(),
-            default => new \Bpjs\Core\Response('Dispatcher not found', 500)
+            default => new \Bpjs\Framework\Core\Response('Dispatcher not found', 500)
         };
     }
 
