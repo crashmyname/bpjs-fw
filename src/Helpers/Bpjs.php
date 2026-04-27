@@ -6,11 +6,12 @@ class Bpjs
     protected $migrationLogFile = 'database/migrations/.migrated.json';
     protected bool $running = true;
     protected $commands = [
+        'init' => 'initProject',
         'make:model' => 'createModel',
         'make:controller' => 'createController',
         'make:service' => 'createService',
-        'make:DTO' => 'createDTO',
-        'make:Repo' => 'createRepo',
+        'make:dto' => 'createDTO',
+        'make:repo' => 'createRepo',
         'make:import' => 'createImport',
         'make:export' => 'createExport',
         'make:migration' => 'createMigration',
@@ -38,6 +39,29 @@ class Bpjs
         } else {
             echo "Perintah tidak ditemukan!\n";
         }
+    }
+
+    protected function initProject()
+    {
+        $projectName = basename(getcwd());
+
+        $envPath = BPJS_BASE_PATH . '/.env';
+
+        if (!file_exists($envPath)) {
+            copy(BPJS_BASE_PATH . '/.env.example', $envPath);
+        }
+
+        $env = file_get_contents($envPath);
+
+        $key = base64_encode(random_bytes(32));
+
+        $env = preg_replace('/^APP_NAME=.*/m', "APP_NAME={$projectName}", $env);
+        $env = preg_replace('/^APP_URL=.*/m', "APP_URL=http://localhost/{$projectName}", $env);
+        $env = preg_replace('/^APP_KEY=.*/m', "APP_KEY={$key}", $env);
+
+        file_put_contents($envPath, $env);
+
+        echo "Project initialized successfully.\n";
     }
 
     protected function createModel($name)
