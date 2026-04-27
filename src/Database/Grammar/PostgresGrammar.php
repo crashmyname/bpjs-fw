@@ -2,35 +2,76 @@
 
 namespace Bpjs\Framework\Database\Grammar;
 
-class PostgresGrammar extends Grammar
+class PostgresGrammar implements GrammarInterface
 {
-    public function limitOffset($limit, $offset)
+    public function driverName(): string { return 'pgsql'; }
+
+    public function wrapIdentifier(string $name): string
     {
-        return "LIMIT {$limit} OFFSET {$offset}";
+        if ($name === '*') return '*';
+        return '"' . str_replace('"', '""', $name) . '"';
     }
 
-    public function month($column)
+    public function wrapTable(string $table): string
     {
-        return "EXTRACT(MONTH FROM {$column})";
+        return implode('.', array_map(
+            fn($p) => $this->wrapIdentifier($p),
+            explode('.', $table)
+        ));
     }
 
-    public function year($column)
+    public function buildLimitOffset(?int $limit, ?int $offset): string
     {
-        return "EXTRACT(YEAR FROM {$column})";
+        $sql = '';
+        if ($limit !== null)  $sql .= ' LIMIT '  . $limit;
+        if ($offset !== null) $sql .= ' OFFSET ' . $offset;
+        return $sql;
     }
 
-    public function wrap($value)
-    {
-        return "\"{$value}\"";
+    public function buildSelect(
+        string $distinct, array $columns, string $table,
+        array $joins, string $whereClause, string $groupBy,
+        array $orderBy, ?int $limit, ?int $offset
+    ): string {
+        $cols = implode(', ', $columns);
+        $sql  = "SELECT {$distinct} {$cols} FROM {$this->wrapTable($table)}";
+        if ($joins)       $sql .= ' ' . implode(' ', $joins);
+        if ($whereClause) $sql .= $whereClause;
+        if ($groupBy)     $sql .= " GROUP BY {$groupBy}";
+        if ($orderBy)     $sql .= ' ORDER BY ' . implode(', ', $orderBy);
+        $sql .= $this->buildLimitOffset($limit, $offset);
+        return $sql;
     }
 
-    public function lockForUpdate()
+    public function buildInsert(string $table, array $columns, string $primaryKey): array
     {
-        return "FOR UPDATE";
+        $cols   = implode(', ', array_map(fn($c) => $this->wrapIdentifier($c), $columns));
+        $params = ':' . implode(', :', $columns);
+        $pk     = $this->wrapIdentifier($primaryKey);
+        return [
+            'sql'       => "INSERT INTO {$this->wrapTable($table)} ({$cols}) VALUES ({$params}) RETURNING {$pk}",
+            'returning' => true,
+        ];
     }
 
-    public function sharedLock()
+    /**
+     * PostgreSQL pakai RETURNING — last ID ada di result set, bukan lastInsertId().
+     */
+    public function resolveLastInsertId(\PDO $pdo, \PDOStatement $stmt, string $table, string $primaryKey): int|string|null
     {
-        return "FOR SHARE";
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        return $row[$primaryKey] ?? null;
+    }
+
+    public function lockForUpdate(): string { return ' FOR UPDATE'; }
+    public function lockForShare(): string  { return ' FOR SHARE'; }
+
+    public function monthExpr(string $column): string { return "EXTRACT(MONTH FROM {$column})"; }
+    public function yearExpr(string $column): string  { return "EXTRACT(YEAR FROM {$column})"; }
+
+    public function dateExpr(string $column, string $paramName): string
+    {
+        // PostgreSQL butuh cast ke DATE agar perbandingan string benar
+        return "{$column}::date = :{$paramName}";
     }
 }

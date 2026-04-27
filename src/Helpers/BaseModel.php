@@ -3,34 +3,63 @@
 namespace Bpjs\Framework\Helpers;
 
 use Bpjs\Core\Request;
+use Bpjs\Framework\Database\Grammar\GrammarFactory;
+use Bpjs\Framework\Database\Grammar\GrammarInterface;
 use PDO;
-use PDOException;
-use Bpjs\Framework\Helpers\Database;
-use Bpjs\Framework\Helpers\DB;
 
+/**
+ * BaseModel — Multi-Engine ORM Base Class
+ *
+ * Engine yang didukung:
+ *   MySQL / MariaDB  → backtick quote, LIMIT/OFFSET, LOCK IN SHARE MODE
+ *   PostgreSQL       → double-quote, LIMIT/OFFSET, FOR SHARE, RETURNING
+ *   SQLite           → double-quote, LIMIT/OFFSET, lock diabaikan
+ *   SQL Server       → bracket quote, TOP / OFFSET FETCH NEXT, OUTPUT INSERTED
+ *
+ * Untuk menambah engine baru cukup:
+ *   1. Buat class Grammar baru yang implements GrammarInterface
+ *   2. Daftarkan: GrammarFactory::extend('nama_driver', MyGrammar::class)
+ */
 class BaseModel
 {
-    protected $table;
-    protected static $dynamicTable = null;
-    protected $primaryKey = 'id';
-    protected $fillable = [];
-    protected $guarded = [];
-    protected $attributes = [];
-    protected $connection;
-    protected $selectColumns = ['*'];
-    protected $whereConditions = [];
-    protected $whereParams = [];
-    protected $joins = [];
-    protected $groupBy;
-    protected $orderBy = [];
-    protected $distinct = '';
-    protected $limit;
-    protected $offset;
-    protected $orWhereConditions = [];
-    protected $with = [];
-    protected array $relations = [];
+    // =========================================================================
+    // PROPERTIES
+    // =========================================================================
 
-    public function __construct($attributes = [])
+    protected string  $table      = '';
+    protected string  $primaryKey = 'id';
+    protected array   $fillable   = [];
+    protected array   $guarded    = [];
+    protected array   $attributes = [];
+    protected array   $relations  = [];
+
+    // Query builder state
+    protected array   $selectColumns     = ['*'];
+    protected array   $whereConditions   = [];
+    protected array   $whereParams       = [];
+    protected array   $joins             = [];
+    protected ?string $groupBy           = null;
+    protected array   $orderBy           = [];
+    protected string  $distinct          = '';
+    protected ?int    $limit             = null;
+    protected ?int    $offset            = null;
+    protected array   $orWhereConditions = [];
+    protected array   $with              = [];
+
+    // Per-request dynamic table override
+    protected static ?string $dynamicTable = null;
+
+    // PDO connection
+    protected ?PDO $connection = null;
+
+    // Grammar — resolved once per driver, cached via GrammarFactory
+    protected static ?GrammarInterface $grammar = null;
+
+    // =========================================================================
+    // CONSTRUCTOR & CONNECTION
+    // =========================================================================
+
+    public function __construct(array|object $attributes = [])
     {
         if (is_object($attributes)) {
             $attributes = (array) $attributes;
@@ -39,1052 +68,715 @@ class BaseModel
         $this->connect();
     }
 
-    private function connect()
+    private function connect(): void
     {
         try {
             $this->connection = Database::connection();
+
             if ($this->connection === null) {
-                if (env('APP_DEBUG') == 'false') {
-                    if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                        header('Content-Type: application/json', true, 500);
-                        echo json_encode([
-                            'statusCode' => 500,
-                            'error'      => 'Internal Server Error'
-                        ]);
-                    } else {
-                        return View::error(500);
-                    }
-                    exit;
-                }
-                throw new \Exception('Database connection failed.');
+                $this->abort(500, 'Database connection failed.');
+            }
+
+            if (static::$grammar === null) {
+                $driver          = $this->connection->getAttribute(PDO::ATTR_DRIVER_NAME);
+                static::$grammar = GrammarFactory::make($driver);
             }
         } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-            die();
+            $this->abort(500, $e->getMessage(), $e);
         }
     }
 
-    private function filterAttributes($attributes)
+    // =========================================================================
+    // ERROR HANDLING
+    // =========================================================================
+
+    private function abort(int $code = 500, string $message = 'Internal Server Error', ?\Throwable $e = null)
+    {
+        if (env('APP_DEBUG') !== 'false') {
+            throw new \RuntimeException($message, $code, $e);
+        }
+
+        $isJson = Request::isAjax()
+            || (isset($_SERVER['HTTP_ACCEPT']) && str_contains($_SERVER['HTTP_ACCEPT'], 'application/json'));
+
+        if ($isJson) {
+            header('Content-Type: application/json', true, $code);
+            echo json_encode(['statusCode' => $code, 'error' => 'Internal Server Error']);
+        } else {
+            View::error($code);
+        }
+
+        exit;
+    }
+
+    // =========================================================================
+    // GRAMMAR SHORTCUT
+    // =========================================================================
+
+    protected function g(): GrammarInterface
+    {
+        return static::$grammar;
+    }
+
+    // =========================================================================
+    // ATTRIBUTE HELPERS
+    // =========================================================================
+
+    private function filterAttributes(array $attributes): array
     {
         if (!empty($this->fillable)) {
             return array_intersect_key($attributes, array_flip($this->fillable));
         }
-
         if (!empty($this->guarded)) {
             return array_diff_key($attributes, array_flip($this->guarded));
         }
-
         return $attributes;
     }
 
-    public function fill(array $attributes)
+    public function fill(array $attributes): void
     {
-        $this->attributes = array_merge($this->attributes, $this->filterAttributes($attributes));
+        $this->attributes = array_merge(
+            $this->attributes,
+            $this->filterAttributes($attributes)
+        );
     }
 
-    public function beginTransaction()
-    {
-        $this->connection->beginTransaction();
-    }
+    // =========================================================================
+    // TRANSACTION
+    // =========================================================================
 
-    public function commit()
-    {
-        $this->connection->commit();
-    }
+    public function beginTransaction(): void { $this->connection->beginTransaction(); }
+    public function commit(): void           { $this->connection->commit(); }
+    public function rollback(): void         { $this->connection->rollBack(); }
 
-    public function rollback()
-    {
-        $this->connection->rollback();
-    }
+    // =========================================================================
+    // QUERY BUILDER
+    // =========================================================================
 
-    public static function query()
+    public static function query(): static
     {
         return new static();
     }
 
-    public function select(...$columns)
+    public function select(string ...$columns): static
     {
-        $this->selectColumns = empty($columns) ? ['*'] : $columns;
+        $this->selectColumns = empty($columns) ? ['*'] : array_values($columns);
         return $this;
     }
 
-    public function selectRaw($rawExpression)
+    public function selectRaw(string $expression): static
     {
-        $this->selectColumns[] = $rawExpression;
+        $this->selectColumns[] = $expression;
         return $this;
     }
 
-
-    public function distinct($value = true)
+    public function distinct(bool $value = true): static
     {
         $this->distinct = $value ? 'DISTINCT' : '';
         return $this;
     }
 
-    public function where($column, $operator = '=', $value = null)
+    // ---- WHERE ---------------------------------------------------------------
+
+    public function where(mixed $column, string $operator = '=', mixed $value = null): static
     {
         if ($column instanceof \Closure) {
-            $subQuery = new static();
-            $column($subQuery);
+            return $this->applyClosureWhere($column, $this->whereConditions, $this->whereParams);
+        }
 
-            if (!empty($subQuery->whereConditions) || !empty($subQuery->orWhereConditions)) {
-                $parts = [];
-                
-                if (!empty($subQuery->whereConditions)) {
-                    $parts[] = implode(' AND ', $subQuery->whereConditions);
-                }
-
-                if (!empty($subQuery->orWhereConditions)) {
-                    $parts[] = implode(' OR ', $subQuery->orWhereConditions);
-                }
-
-                $combined = implode(' OR ', array_filter($parts));
-                
-                if (!empty($combined)) {
-                    $this->whereConditions[] = '(' . $combined . ')';
-                    $this->whereParams = array_merge($this->whereParams, $subQuery->whereParams);
-                }
-            }
+        if (strtoupper($operator) === 'LIKE' || strtoupper($operator) === 'NOT LIKE') {
+            $param = $this->uniqueParam($column);
+            $this->whereConditions[] = "{$column} {$operator} :{$param}";
+            $this->whereParams[":{$param}"] = $value;
             return $this;
         }
 
-        if (strtoupper($operator) === 'LIKE') {
-            $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
-            $this->whereConditions[] = "{$column} LIKE :{$paramName}";
-            $this->whereParams[":{$paramName}"] = $value;
-        } elseif ($value === null || $value == '') {
-            if ($operator === '=') $operator = 'IS';
-            elseif ($operator === '!=') $operator = 'IS NOT';
-            $this->whereConditions[] = "{$column} {$operator} NULL";
-        } else {
-            $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
-            $this->whereConditions[] = "{$column} {$operator} :{$paramName}";
-            $this->whereParams[":{$paramName}"] = $value;
+        if ($value === null || $value === '') {
+            $op = ($operator === '!=' || $operator === '<>') ? 'IS NOT' : 'IS';
+            $this->whereConditions[] = "{$column} {$op} NULL";
+            return $this;
         }
 
+        $param = $this->uniqueParam($column);
+        $this->whereConditions[] = "{$column} {$operator} :{$param}";
+        $this->whereParams[":{$param}"] = $value;
         return $this;
     }
 
-    public function whereIn($column, array $values)
+    public function orWhere(mixed $column, string $operator = '=', mixed $value = null): static
+    {
+        if ($column instanceof \Closure) {
+            return $this->applyClosureWhere($column, $this->orWhereConditions, $this->whereParams);
+        }
+
+        if ($value === null || $value === '') {
+            $op = ($operator === '!=' || $operator === '<>') ? 'IS NOT' : 'IS';
+            $this->orWhereConditions[] = "{$column} {$op} NULL";
+            return $this;
+        }
+
+        $param = $this->uniqueParam($column);
+        $this->orWhereConditions[] = "{$column} {$operator} :{$param}";
+        $this->whereParams[":{$param}"] = $value;
+        return $this;
+    }
+
+    public function whereIn(string $column, array $values): static
     {
         if (empty($values)) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            throw new \InvalidArgumentException('The values array cannot be empty for whereIn condition.');
+            throw new \InvalidArgumentException("whereIn() values cannot be empty.");
         }
-
         $placeholders = [];
-        foreach ($values as $index => $value) {
-            $paramName = str_replace('.', '_', $column) . "_in_{$index}";
-            $placeholders[] = ":{$paramName}";
-            $this->whereParams[":{$paramName}"] = $value;
+        foreach ($values as $i => $value) {
+            $param = $this->uniqueParam($column . "_in{$i}");
+            $placeholders[] = ":{$param}";
+            $this->whereParams[":{$param}"] = $value;
         }
-
-        $placeholdersString = implode(', ', $placeholders);
-        $this->whereConditions[] = "{$column} IN ({$placeholdersString})";
-
+        $this->whereConditions[] = "{$column} IN (" . implode(', ', $placeholders) . ")";
         return $this;
     }
 
-    public function orWhere($column, $operator = '=', $value = null)
+    public function whereNotIn(string $column, array $values): static
     {
-        // 🔹 Jika pakai closure
-        if ($column instanceof \Closure) {
-            $subQuery = new static();
-            $column($subQuery);
-
-            $group = [];
-            if (!empty($subQuery->whereConditions)) {
-                $group[] = '(' . implode(' AND ', $subQuery->whereConditions) . ')';
-            }
-            if (!empty($subQuery->orWhereConditions)) {
-                $group[] = '(' . implode(' OR ', $subQuery->orWhereConditions) . ')';
-            }
-
-            if (!empty($group)) {
-                $this->orWhereConditions[] = '(' . implode(' AND ', $group) . ')';
-                $this->whereParams = array_merge($this->whereParams, $subQuery->whereParams);
-            }
-
-            return $this;
+        if (empty($values)) {
+            throw new \InvalidArgumentException("whereNotIn() values cannot be empty.");
         }
-
-        // 🔹 Default lama
-        if ($value === null || $value == '') {
-            if ($operator === '=') $operator = 'IS';
-            elseif ($operator === '!=') $operator = 'IS NOT';
-            $this->orWhereConditions[] = "{$column} {$operator} NULL";
-        } else {
-            $paramName = str_replace('.', '_', $column) . '_' . count($this->whereParams);
-            $this->orWhereConditions[] = "{$column} {$operator} :{$paramName}";
-            $this->whereParams[":{$paramName}"] = $value;
+        $placeholders = [];
+        foreach ($values as $i => $value) {
+            $param = $this->uniqueParam($column . "_notin{$i}");
+            $placeholders[] = ":{$param}";
+            $this->whereParams[":{$param}"] = $value;
         }
-
+        $this->whereConditions[] = "{$column} NOT IN (" . implode(', ', $placeholders) . ")";
         return $this;
     }
 
-    public function whereDate($column, $date)
+    public function whereNull(string $column): static
     {
-        return $this->where($column, '=', $date);
-    }
-
-    public function whereMonth($column, $month)
-    {
-        $this->whereConditions[] = "MONTH({$column}) = :month";
-        $this->whereParams[':month'] = $month;
+        $this->whereConditions[] = "{$column} IS NULL";
         return $this;
     }
 
-    public function whereYear($column, $year)
+    public function whereNotNull(string $column): static
     {
-        $this->whereConditions[] = "YEAR({$column}) = :year";
-        $this->whereParams[':year'] = $year;
+        $this->whereConditions[] = "{$column} IS NOT NULL";
         return $this;
     }
 
-    public function whereBetween($column, $start, $end)
+    public function whereBetween(string $column, mixed $start, mixed $end): static
     {
-        $paramStart = str_replace('.', '_', $column) . "_start_" . count($this->whereParams);
-        $paramEnd = str_replace('.', '_', $column) . "_end_" . count($this->whereParams);
-
-        $this->whereConditions[] = "{$column} BETWEEN :{$paramStart} AND :{$paramEnd}";
-
-        $this->whereParams[":{$paramStart}"] = $start;
-        $this->whereParams[":{$paramEnd}"] = $end;
-
+        $pStart = $this->uniqueParam($column . '_start');
+        $pEnd   = $this->uniqueParam($column . '_end');
+        $this->whereConditions[] = "{$column} BETWEEN :{$pStart} AND :{$pEnd}";
+        $this->whereParams[":{$pStart}"] = $start;
+        $this->whereParams[":{$pEnd}"]   = $end;
         return $this;
     }
 
-    public function whereRaw($rawSql, array $bindings = [])
+    public function whereDate(string $column, string $date): static
     {
-        $this->whereConditions[] = "({$rawSql})";
+        $param = $this->uniqueParam($column . '_date');
+        $this->whereConditions[] = $this->g()->dateExpr($column, $param);
+        $this->whereParams[":{$param}"] = $date;
+        return $this;
+    }
+
+    public function whereMonth(string $column, int|string $month): static
+    {
+        $param = $this->uniqueParam($column . '_month');
+        $this->whereConditions[] = $this->g()->monthExpr($column) . " = :{$param}";
+        $this->whereParams[":{$param}"] = (int) $month;
+        return $this;
+    }
+
+    public function whereYear(string $column, int|string $year): static
+    {
+        $param = $this->uniqueParam($column . '_year');
+        $this->whereConditions[] = $this->g()->yearExpr($column) . " = :{$param}";
+        $this->whereParams[":{$param}"] = (int) $year;
+        return $this;
+    }
+
+    public function whereRaw(string $sql, array $bindings = []): static
+    {
+        $this->whereConditions[] = "({$sql})";
         foreach ($bindings as $key => $val) {
             $this->whereParams[$key] = $val;
         }
         return $this;
     }
 
-    public function innerJoin($table, $first, $operator, $second)
+    // ---- JOIN ---------------------------------------------------------------
+
+    public function innerJoin(string $table, string $first, string $op, string $second): static
     {
-        return $this->join($table, $first, $operator, $second, 'INNER');
+        return $this->addJoin('INNER', $table, $first, $op, $second);
     }
 
-    public function leftJoin($table, $first, $operator, $second)
+    public function leftJoin(string $table, string $first, string $op, string $second): static
     {
-        return $this->join($table, $first, $operator, $second, 'LEFT');
+        return $this->addJoin('LEFT', $table, $first, $op, $second);
     }
 
-    public function rightJoin($table, $first, $operator, $second)
+    public function rightJoin(string $table, string $first, string $op, string $second): static
     {
-        return $this->join($table, $first, $operator, $second, 'RIGHT');
+        return $this->addJoin('RIGHT', $table, $first, $op, $second);
     }
 
-    public function outerJoin($table, $first, $operator, $second)
+    public function fullOuterJoin(string $table, string $first, string $op, string $second): static
     {
-        return $this->join($table, $first, $operator, $second, 'OUTER');
+        return $this->addJoin('FULL OUTER', $table, $first, $op, $second);
     }
 
-    private function join($table, $first, $operator, $second, $type)
+    public function crossJoin(string $table): static
     {
-        $validJoinTypes = ['INNER', 'LEFT', 'RIGHT', 'OUTER'];
-
-        if (in_array(strtoupper($type), $validJoinTypes)) {
-            $this->joins[] = "{$type} JOIN {$table} ON {$first} {$operator} {$second}";
-        } else {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            throw new \InvalidArgumentException("Invalid join type: {$type}");
-        }
-
+        $this->joins[] = "CROSS JOIN {$table}";
         return $this;
     }
 
-    public function groupBy($columns)
+    public function joinRaw(string $rawJoin): static
+    {
+        $this->joins[] = $rawJoin;
+        return $this;
+    }
+
+    private function addJoin(string $type, string $table, string $first, string $op, string $second): static
+    {
+        $this->joins[] = "{$type} JOIN {$table} ON {$first} {$op} {$second}";
+        return $this;
+    }
+
+    // ---- ORDER / GROUP / LIMIT ----------------------------------------------
+
+    public function groupBy(array|string $columns): static
     {
         $this->groupBy = is_array($columns) ? implode(', ', $columns) : $columns;
         return $this;
     }
 
-    public function orderBy($column, $direction = 'ASC')
+    public function orderBy(string $column, string $direction = 'ASC'): static
     {
-        $this->orderBy[] = "{$column} {$direction}";
+        $this->orderBy[] = "{$column} " . (strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC');
         return $this;
     }
 
-    public function limit($limit)
+    public function orderByRaw(string $expression): static
+    {
+        $this->orderBy[] = $expression;
+        return $this;
+    }
+
+    public function latest(?string $column = null): static
+    {
+        return $this->orderBy($column ?? $this->primaryKey, 'DESC');
+    }
+
+    public function oldest(?string $column = null): static
+    {
+        return $this->orderBy($column ?? $this->primaryKey, 'ASC');
+    }
+
+    public function limit(int $limit): static
     {
         $this->limit = $limit;
         return $this;
     }
 
-    public function offset($offset)
+    public function offset(int $offset): static
     {
         $this->offset = $offset;
         return $this;
     }
 
-    public function get($fetchStyle = PDO::FETCH_OBJ, $asModel = false)
+    // =========================================================================
+    // READ
+    // =========================================================================
+
+    public function get(int $fetchStyle = PDO::FETCH_OBJ, bool $asModel = false): array
     {
         try {
-            $table = self::$dynamicTable ?? $this->table;
-
-            $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$table}";
-
-            if (!empty($this->joins)) {
-                $sql .= ' ' . implode(' ', $this->joins);
-            }
-
-            if (!empty($this->whereConditions) || !empty($this->orWhereConditions)) {
-                $sql .= ' WHERE ';
-                $conditions = [];
-
-                if (!empty($this->whereConditions)) {
-                    $conditions[] = '(' . implode(' AND ', $this->whereConditions) . ')';
-                }
-
-                if (!empty($this->orWhereConditions)) {
-                    $conditions[] = '(' . implode(' OR ', $this->orWhereConditions) . ')';
-                }
-
-                $sql .= implode(' AND ', $conditions);
-            }
-
-            if (!empty($this->groupBy)) {
-                $sql .= ' GROUP BY ' . $this->groupBy;
-            }
-
-            if (!empty($this->orderBy)) {
-                $sql .= ' ORDER BY ' . implode(', ', $this->orderBy);
-            }
-
-            if ($this->limit !== null) {
-                $sql .= ' LIMIT ' . (int) $this->limit;
-            }
-
-            if ($this->offset !== null) {
-                $sql .= ' OFFSET ' . (int) $this->offset;
-            }
-
+            $sql   = $this->compileSelect();
             $start = microtime(true);
-            $stmt = $this->connection->prepare($sql);
-
-            foreach ($this->whereParams as $key => $value) {
-                $stmt->bindValue($key, $value);
-            }
-
+            $stmt  = $this->connection->prepare($sql);
+            $this->bindAll($stmt);
             $stmt->execute();
-            $duration = round((microtime(true) - $start) * 1000, 2);
 
-            QueryLogger::add(
-                $sql,
-                $this->whereParams,
-                $duration,
-                static::class
-            );
+            QueryLogger::add($sql, $this->whereParams, round((microtime(true) - $start) * 1000, 2), static::class);
 
             if (!$asModel && empty($this->with)) {
                 return $stmt->fetchAll($fetchStyle);
             }
 
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $rows   = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $models = [];
-
             foreach ($rows as $row) {
                 $model = new static();
                 $model->fill($row);
-
-                $models[] = $model;
-            }
-            if (!empty($this->with)) {
-                foreach ($models as $model) {
+                if (!empty($this->with)) {
                     $model->load($this->with);
                 }
+                $models[] = $model;
             }
             return $models;
 
         } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-            return [];
+            $this->abort(500, $e->getMessage(), $e);
         }
     }
 
-    public function first()
+    public function first(): ?static
     {
         $this->limit(1);
         $results = $this->get(PDO::FETCH_ASSOC, true);
-
-        if (!empty($results)) {
-            return $results[0];
-        }
-
-        return null;
+        return $results[0] ?? null;
     }
 
-    public function latest($column = null)
-    {
-        $column = $column ?? $this->primaryKey;
-
-        $this->orderBy[] = $column . ' DESC';
-
-        return $this;
-    }
-
-    public function pluck($column, $key = null)
+    public function pluck(string $column, ?string $key = null): array
     {
         $clone = clone $this;
-        $clone->select($column);
-
+        $clone->selectColumns = $key ? [$column, $key] : [$column];
         $results = $clone->get(PDO::FETCH_ASSOC);
 
         if ($key === null) {
             return array_column($results, $column);
         }
-
-        $output = [];
-
+        $out = [];
         foreach ($results as $row) {
-            if (isset($row[$key])) {
-                $output[$row[$key]] = $row[$column];
-            }
+            if (isset($row[$key])) $out[$row[$key]] = $row[$column];
         }
-
-        return $output;
+        return $out;
     }
 
-    public function getWithRelations($fetchStyle = PDO::FETCH_OBJ)
+    public function getWithRelations(int $fetchStyle = PDO::FETCH_OBJ): array
     {
         return $this->get($fetchStyle, true);
     }
 
-    public function paginate($perPage = 10, $fetchStyle = PDO::FETCH_OBJ)
+    public function count(): int
     {
         try {
-            $table = self::$dynamicTable ?? $this->table;
+            $table = $this->resolveTable();
+            $sql   = "SELECT COUNT(*) as _count FROM {$this->g()->wrapTable($table)}";
+            if (!empty($this->joins))   $sql .= ' ' . implode(' ', $this->joins);
+            $sql .= $this->buildWhereClause();
 
-            $currentPage = isset($_GET['page']) ? (int) $_GET['page'] : 1;
-            if ($currentPage < 1) $currentPage = 1;
-
-            // ==== BUILD BASE QUERY ====
-            $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$table}";
-            if (!empty($this->joins)) $sql .= ' ' . implode(' ', $this->joins);
-
-            $whereClause = '';
-            if (!empty($this->whereConditions) || !empty($this->orWhereConditions)) {
-                $whereClause .= ' WHERE ';
-                $conditions = [];
-
-                if (!empty($this->whereConditions)) {
-                    $conditions[] = '(' . implode(' AND ', $this->whereConditions) . ')';
-                }
-                if (!empty($this->orWhereConditions)) {
-                    $conditions[] = '(' . implode(' OR ', $this->orWhereConditions) . ')';
-                }
-
-                $whereClause .= implode(' AND ', $conditions);
-                $sql .= $whereClause;
-            }
-
-            if (!empty($this->groupBy)) $sql .= ' GROUP BY ' . $this->groupBy;
-            if (!empty($this->orderBy)) $sql .= ' ORDER BY ' . implode(', ', $this->orderBy);
-
-            $countSql = "SELECT COUNT(*) as total FROM (
-                SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$table}";
-            if (!empty($this->joins)) $countSql .= ' ' . implode(' ', $this->joins);
-            if (!empty($whereClause)) $countSql .= " " . $whereClause;
-            $countSql .= ") as subquery";
-
-            $stmtCount = $this->connection->prepare($countSql);
-            foreach ($this->whereParams as $key => $value) {
-                $stmtCount->bindValue($key, $value);
-            }
-            $stmtCount->execute();
-            $total = (int)$stmtCount->fetchColumn();
-
-            $lastPage = max(1, (int)ceil($total / $perPage));
-            $currentPage = max(1, min($currentPage, $lastPage));
-            $offset = ($currentPage - 1) * $perPage;
-
-            $sql .= " LIMIT {$perPage} OFFSET {$offset}";
             $stmt = $this->connection->prepare($sql);
-            foreach ($this->whereParams as $key => $value) {
-                $stmt->bindValue($key, $value);
-            }
+            $this->bindAll($stmt);
+            $stmt->execute();
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return (int) ($row['_count'] ?? 0);
+        } catch (\Exception $e) {
+            $this->abort(500, $e->getMessage(), $e);
+        }
+    }
+
+    public function exists(): bool
+    {
+        return $this->count() > 0;
+    }
+
+    public static function all(int $fetchStyle = PDO::FETCH_OBJ): array
+    {
+        try {
+            $instance = new static();
+            $table    = static::$dynamicTable ?? $instance->table;
+            $sql      = "SELECT * FROM {$instance->g()->wrapTable($table)}";
+            $stmt     = $instance->connection->prepare($sql);
+            $stmt->execute();
+            return $stmt->fetchAll($fetchStyle);
+        } catch (\Exception $e) {
+            (new static())->abort(500, $e->getMessage(), $e);
+        }
+    }
+
+    public static function find(mixed $id, int $fetchStyle = PDO::FETCH_OBJ): ?static
+    {
+        $instance = new static();
+        $table    = static::$dynamicTable ?? $instance->table;
+        $pk       = $instance->primaryKey;
+        $sql      = "SELECT * FROM {$instance->g()->wrapTable($table)} WHERE {$pk} = :id";
+        $stmt     = $instance->connection->prepare($sql);
+        $stmt->bindValue(':id', $id);
+        $stmt->execute();
+        $data = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $data ? new static($data) : null;
+    }
+
+    public static function existsWhere(array $conditions): bool
+    {
+        $query = static::query();
+        foreach ($conditions as $field => $value) {
+            $query->where($field, '=', $value);
+        }
+        return $query->first() !== null;
+    }
+
+    // ---- PAGINATE -----------------------------------------------------------
+
+    public function paginate(int $perPage = 10, int $fetchStyle = PDO::FETCH_OBJ): array
+    {
+        $blank = ['data' => [], 'pagination' => [
+            'total' => 0, 'per_page' => $perPage, 'current_page' => 1,
+            'last_page' => 1, 'from' => null, 'to' => null,
+        ]];
+
+        try {
+            $table        = $this->resolveTable();
+            $currentPage  = max(1, (int) ($_GET['page'] ?? 1));
+            $where        = $this->buildWhereClause();
+            $joinStr      = !empty($this->joins) ? ' ' . implode(' ', $this->joins) : '';
+            $groupStr     = $this->groupBy ? " GROUP BY {$this->groupBy}" : '';
+            $cols         = implode(', ', $this->selectColumns);
+            $wrapped      = $this->g()->wrapTable($table);
+
+            $countSql  = "SELECT COUNT(*) as _total FROM (SELECT {$this->distinct} {$cols} FROM {$wrapped}{$joinStr}{$where}{$groupStr}) as _sub";
+            $stmtCount = $this->connection->prepare($countSql);
+            $this->bindAll($stmtCount);
+            $stmtCount->execute();
+            $total = (int) $stmtCount->fetchColumn();
+
+            $lastPage    = max(1, (int) ceil($total / $perPage));
+            $currentPage = min($currentPage, $lastPage);
+            $offset      = ($currentPage - 1) * $perPage;
+
+            $sql  = $this->g()->buildSelect(
+                $this->distinct, $this->selectColumns, $table,
+                $this->joins, $where, $this->groupBy ?? '',
+                $this->orderBy, $perPage, $offset
+            );
+
+            $stmt = $this->connection->prepare($sql);
+            $this->bindAll($stmt);
             $stmt->execute();
             $rows = $stmt->fetchAll($fetchStyle);
 
             $data = [];
             foreach ($rows as $row) {
                 $model = new static();
-                $model->fill((array)$row);
-
-                if (!empty($this->with)) {
-                    $model->load($this->with);
-                }
-
-                if (method_exists($model, 'toCleanArray')) {
-                    $data[] = $model->toCleanArray();
-                } else {
-                    $data[] = (array)$row;
-                }
+                $model->fill((array) $row);
+                if (!empty($this->with)) $model->load($this->with);
+                $data[] = method_exists($model, 'toCleanArray') ? $model->toCleanArray() : (array) $row;
             }
 
             return [
-                "data" => $data,
-                "pagination" => [
-                    "total"        => $total,
-                    "per_page"     => $perPage,
-                    "current_page" => $currentPage,
-                    "last_page"    => $lastPage,
-                    "from"         => $offset + 1,
-                    "to"           => $offset + count($data),
-                ]
+                'data'       => $data,
+                'pagination' => [
+                    'total'        => $total,
+                    'per_page'     => $perPage,
+                    'current_page' => $currentPage,
+                    'last_page'    => $lastPage,
+                    'from'         => $total > 0 ? $offset + 1 : null,
+                    'to'           => $total > 0 ? $offset + count($data) : null,
+                ],
             ];
         } catch (\Exception $e) {
             ErrorHandler::handleException($e);
-            return [
-                "data" => [],
-                "pagination" => [
-                    "total" => 0,
-                    "per_page" => $perPage,
-                    "current_page" => 1,
-                    "last_page" => 1,
-                    "from" => null,
-                    "to" => null,
-                ]
-            ];
+            return $blank;
         }
     }
 
-    public function toSql()
-    {
-        try {
-            $table = self::$dynamicTable ?? $this->table;
-            $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$table}";
+    // =========================================================================
+    // WRITE
+    // =========================================================================
 
-            if (!empty($this->joins)) {
-                $sql .= ' ' . implode(' ', $this->joins);
-            }
-
-            if (!empty($this->whereConditions)) {
-                $sql .= ' WHERE ' . implode(' AND ', $this->whereConditions);
-            }
-
-            if (!empty($this->groupBy)) {
-                $sql .= ' GROUP BY ' . $this->groupBy;
-            }
-
-            if (!empty($this->orderBy)) {
-                $sql .= ' ORDER BY ' . implode(', ', $this->orderBy);
-            }
-
-            if ($this->limit !== null) {
-                $sql .= ' LIMIT ' . (int) $this->limit;
-            }
-
-            if ($this->offset !== null) {
-                $sql .= ' OFFSET ' . (int) $this->offset;
-            }
-
-            return $sql;
-        } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-        }
-    }
-
-    public function getRawSQL()
-    {
-        try {
-            $sql = $this->toSql();
-            $bindings = $this->bindings ?? [];
-
-            foreach ($bindings as $binding) {
-                if (is_string($binding)) {
-                    $binding = "'" . addslashes($binding) . "'";
-                } elseif (is_null($binding)) {
-                    $binding = "NULL";
-                } elseif (is_bool($binding)) {
-                    $binding = $binding ? '1' : '0';
-                }
-
-                $sql = preg_replace('/\?/', $binding, $sql, 1);
-            }
-
-            return $sql;
-        } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-        }
-    }
-
-    public static function setCustomTable($parameter)
-    {
-        $instance = new static();
-        self::$dynamicTable = $parameter;
-        return $instance;
-    }
-
-    public static function setTable($tablecustom)
-    {
-        $instance = new static();
-        $tablePrefix = $instance->table;
-        self::$dynamicTable = $tablePrefix . $tablecustom;
-        return new static();
-    }
-
-    public static function all($fetchStyle = PDO::FETCH_OBJ)
-    {
-        try {
-            $instance = new static();
-            $instance->table = self::$dynamicTable ?? ($instance->table ?? 'default_table');
-            $sql = "SELECT * FROM {$instance->table}";
-            $stmt = $instance->connection->prepare($sql);
-            $stmt->execute();
-            $data = $stmt->fetchAll($fetchStyle);
-            return $data;
-        } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-            return [];
-        }
-    }
-
-    public function count()
-    {
-        try {
-            $table = self::$dynamicTable ?? $this->table;
-            $sql = "SELECT COUNT(*) as count FROM {$table}";
-
-            if (!empty($this->joins)) {
-                $sql .= ' ' . implode(' ', $this->joins);
-            }
-
-            if (!empty($this->whereConditions) || !empty($this->orWhereConditions)) {
-                $sql .= ' WHERE ';
-                $conditions = [];
-
-                if (!empty($this->whereConditions)) {
-                    $conditions[] = '(' . implode(' AND ', $this->whereConditions) . ')';
-                }
-
-                if (!empty($this->orWhereConditions)) {
-                    $conditions[] = '(' . implode(' OR ', $this->orWhereConditions) . ')';
-                }
-
-                $sql .= implode(' AND ', $conditions);
-            }
-
-            $stmt = $this->connection->prepare($sql);
-
-            foreach ($this->whereParams as $key => $value) {
-                $stmt->bindValue($key, $value);
-            }
-
-            $stmt->execute();
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            return $result['count'];
-        } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-            return 0;
-        }
-    }
-
-    public static function create($attributes)
+    public static function create(array $attributes): ?static
     {
         try {
             $instance = new static($attributes);
-            if (self::$dynamicTable) {
-                $instance->table = self::$dynamicTable;
-            }
-            if (!$instance->table) {
-                $instance->table = isset($instance->table) ? $instance->table : 'default_table';
-            }
+            if (static::$dynamicTable) $instance->table = static::$dynamicTable;
             $instance->save();
             return $instance;
         } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-            return null;
+            (new static())->abort(500, $e->getMessage(), $e);
         }
     }
 
-    public function save()
-    {
-        try{
-            $this->connection = DB::getConnection();
-            $table = self::$dynamicTable ?? $this->table;
-    
-            if (!empty($this->attributes[$this->primaryKey])) {
-                $this->updates();
-            } else {
-                $columns = implode(',', array_keys($this->attributes));
-                $placeholders = ':' . implode(', :', array_keys($this->attributes));
-                $sql = "INSERT INTO {$table} ({$columns}) VALUES ({$placeholders})";
-                $stmt = $this->connection->prepare($sql);
-    
-                foreach ($this->attributes as $key => $value) {
-                    $stmt->bindValue(':' . $key, $value);
-                }
-    
-                $stmt->execute();
-                if ($this->primaryKey) {
-                    $this->attributes[$this->primaryKey] = $this->connection->lastInsertId();
-                }
-            }
-    
-            return true;
-        } catch (\Exception $e){
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-        }
-    }
-
-    public function updates($data = null)
+    public function save(): bool
     {
         try {
             $this->connection = DB::getConnection();
-            $table = self::$dynamicTable ?? $this->table;
+            $table = $this->resolveTable();
 
-            $dataToUpdate = $data ?? array_filter($this->attributes, function($key) {
-                return !in_array($key, $this->with ?? []);
-            }, ARRAY_FILTER_USE_KEY);
-
-            $setClause = [];
-            foreach ($dataToUpdate as $key => $value) {
-                $setClause[] = "{$key} = :{$key}";
+            if (!empty($this->attributes[$this->primaryKey])) {
+                return $this->performUpdate();
             }
-            $setClause = implode(', ', $setClause);
 
-            $sql = "UPDATE {$table} SET {$setClause} WHERE {$this->primaryKey} = :{$this->primaryKey}";
+            $attrs   = $this->attributes;
+            $columns = array_keys($attrs);
+
+            ['sql' => $sql, 'returning' => $returning] = $this->g()->buildInsert($table, $columns, $this->primaryKey);
+
             $stmt = $this->connection->prepare($sql);
-
-            foreach ($dataToUpdate as $key => $value) {
+            foreach ($attrs as $key => $value) {
                 $stmt->bindValue(':' . $key, $value);
             }
-
-            $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
             $stmt->execute();
+
+            $this->attributes[$this->primaryKey] = $this->g()->resolveLastInsertId(
+                $this->connection, $stmt, $table, $this->primaryKey
+            );
+            return true;
+
         } catch (\Exception $e) {
-            ErrorHandler::handleException($e);
+            $this->abort(500, $e->getMessage(), $e);
         }
     }
 
-    public static function updateOrCreate(array $conditions, array $attributes)
+    public function updates(?array $data = null): bool
+    {
+        return $this->performUpdate($data);
+    }
+
+    public function update(array $data): bool
+    {
+        return $this->performUpdate($data);
+    }
+
+    private function performUpdate(?array $data = null): bool
     {
         try {
-            $query = static::query();
-            foreach ($conditions as $field => $value) {
-                $query->where($field, '=', $value);
-            }
+            $this->connection = DB::getConnection();
+            $table = $this->resolveTable();
 
-            $instance = $query->first();
+            $data = $data ?? array_filter(
+                $this->attributes,
+                fn($k) => $k !== $this->primaryKey,
+                ARRAY_FILTER_USE_KEY
+            );
+
+            if (empty($data)) return true;
+
+            $set  = implode(', ', array_map(fn($k) => "{$k} = :{$k}", array_keys($data)));
+            $sql  = "UPDATE {$this->g()->wrapTable($table)} SET {$set} WHERE {$this->primaryKey} = :{$this->primaryKey}";
+            $stmt = $this->connection->prepare($sql);
+            foreach ($data as $k => $v) $stmt->bindValue(':' . $k, $v);
+            $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
+            return $stmt->execute();
+
+        } catch (\Exception $e) {
+            ErrorHandler::handleException($e);
+            return false;
+        }
+    }
+
+    public static function updateOrCreate(array $conditions, array $attributes): ?static
+    {
+        try {
+            $q = static::query();
+            foreach ($conditions as $field => $value) $q->where($field, '=', $value);
+            $instance = $q->first();
 
             if ($instance) {
-                foreach ($attributes as $key => $value) {
-                    $instance->$key = $value;
-                }
+                foreach ($attributes as $k => $v) $instance->$k = $v;
                 $instance->save();
                 return $instance;
             }
-
-            $data = array_merge($conditions, $attributes);
-            return static::create($data);
-
+            return static::create(array_merge($conditions, $attributes));
         } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
-            return null;
+            (new static())->abort(500, $e->getMessage(), $e);
         }
     }
 
-    public function saveWithRelations(array $relations = [])
+    public static function insertBatch(array $rows): array|false
     {
-        $this->save();
+        if (empty($rows)) return false;
 
-        $relationsToSave = !empty($relations)
-            ? $relations
-            : array_keys($this->relations);
+        $connection = DB::getConnection();
+        $instance   = new static();
+        $table      = static::$dynamicTable ?? $instance->table;
+        $columns    = array_keys($rows[0]);
+        $g          = $instance->g();
+        $driver     = $g->driverName();
 
-        foreach ($relationsToSave as $relationName) {
-            if (!isset($this->relations[$relationName])) continue;
+        try {
+            $inTx = $connection->inTransaction();
+            if (!$inTx) $connection->beginTransaction();
 
-            $relationInfo = $this->$relationName();
-            $relationData = $this->relations[$relationName];
-            $relatedModel = $relationInfo['model'];
+            $wrapped    = $g->wrapTable($table);
+            $colWrapped = implode(', ', array_map(fn($c) => $g->wrapIdentifier($c), $columns));
+            $pk         = $g->wrapIdentifier($instance->primaryKey);
+            $firstId    = null;
 
-            switch ($relationInfo['type']) {
-                case 'hasOne':
-                    $relationData->{$relationInfo['foreignKey']} =
-                        $this->attributes[$relationInfo['localKey']];
-                    $relationData->save();
-                    break;
-
-                case 'hasMany':
-                    foreach ($relationData as $item) {
-                        $item->{$relationInfo['foreignKey']} =
-                            $this->attributes[$relationInfo['localKey']];
-                        $item->save();
+            if (in_array($driver, ['pgsql', 'sqlsrv', 'dblib', 'mssql'], true)) {
+                // Named params + engine-specific return clause
+                $rowParts  = [];
+                $allParams = [];
+                foreach ($rows as $i => $row) {
+                    $rowP = [];
+                    foreach ($columns as $col) {
+                        $k = ":{$col}_{$i}";
+                        $rowP[]       = $k;
+                        $allParams[$k] = $row[$col];
                     }
-                    break;
-
-                case 'belongsTo':
-                    $relationData->save();
-                    $this->attributes[$relationInfo['foreignKey']] =
-                        $relationData->{$relationInfo['ownerKey']};
-                    $this->save();
-                    break;
-            }
-        }
-
-        return $this;
-    }
-
-    public static function insertBatch(array $rows)
-    {
-        if (empty($rows)) {
-            return false;
-        }
-
-        try {
-            $instance = new static();
-            $connection = DB::getConnection();
-            $table = self::$dynamicTable ?? $instance->table ?? 'default_table';
-
-            $columns = array_keys($rows[0]);
-            $columnList = implode(',', array_map(fn($col) => "`$col`", $columns));
-
-            $placeholderRow = '(' . implode(',', array_fill(0, count($columns), '?')) . ')';
-            $placeholders = implode(',', array_fill(0, count($rows), $placeholderRow));
-
-            $values = [];
-            foreach ($rows as $row) {
-                foreach ($columns as $col) {
-                    $values[] = $row[$col];
+                    $rowParts[] = '(' . implode(', ', $rowP) . ')';
                 }
+                $valuesClause = implode(', ', $rowParts);
+
+                $sql = match($driver) {
+                    'pgsql'             => "INSERT INTO {$wrapped} ({$colWrapped}) VALUES {$valuesClause} RETURNING {$pk}",
+                    'sqlsrv','dblib','mssql' => "INSERT INTO {$wrapped} ({$colWrapped}) OUTPUT INSERTED.{$pk} VALUES {$valuesClause}",
+                    default             => "INSERT INTO {$wrapped} ({$colWrapped}) VALUES {$valuesClause}",
+                };
+
+                $stmt = $connection->prepare($sql);
+                foreach ($allParams as $k => $v) $stmt->bindValue($k, $v);
+                $stmt->execute();
+
+                $row     = $stmt->fetch(PDO::FETCH_ASSOC);
+                $firstId = $row[$instance->primaryKey] ?? null;
+
+            } else {
+                // MySQL / SQLite: positional ? lebih efisien untuk batch besar
+                $rowP    = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+                $allP    = implode(', ', array_fill(0, count($rows), $rowP));
+                $values  = [];
+                foreach ($rows as $row) {
+                    foreach ($columns as $col) $values[] = $row[$col];
+                }
+                $stmt = $connection->prepare("INSERT INTO {$wrapped} ({$colWrapped}) VALUES {$allP}");
+                $stmt->execute($values);
+                $firstId = $connection->lastInsertId();
             }
 
-            $sql = "INSERT INTO `{$table}` ({$columnList}) VALUES {$placeholders}";
+            if (!$inTx) $connection->commit();
+            return ['first_id' => $firstId, 'total_inserted' => count($rows)];
 
-            // Cek apakah sudah dalam transaksi
-            $inTransaction = $connection->inTransaction();
-
-            if (!$inTransaction) {
-                $connection->beginTransaction();
-            }
-
-            $stmt = $connection->prepare($sql);
-            $stmt->execute($values);
-
-            if (!$inTransaction) {
-                $connection->commit();
-            }
-
-            $firstId = $connection->lastInsertId();
-
-            return [
-                'first_id' => $firstId,
-                'total_inserted' => count($rows),
-            ];
         } catch (\Exception $e) {
-            if ($connection->inTransaction()) {
-                $connection->rollBack();
-            }
+            if ($connection->inTransaction()) $connection->rollBack();
             ErrorHandler::handleException($e);
             return false;
         }
     }
 
-    public function update($data)
-    {
-        $this->connection = DB::getConnection();
-        $setClause = [];
-        foreach ($data as $key => $value) {
-            $setClause[] = "{$key} = :{$key}";
-        }
-        $setClause = implode(', ', $setClause);
+    // ---- DELETE -------------------------------------------------------------
 
-        $table = self::$dynamicTable ?? $this->table;
-        $sql = "UPDATE {$table} SET {$setClause} WHERE {$this->primaryKey} = :{$this->primaryKey}";
-
-        $stmt = $this->connection->prepare($sql);
-
-        foreach ($data as $key => $value) {
-            $stmt->bindValue(':' . $key, $value);
-        }
-
-        $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
-
-        $stmt->execute();
-    }
-    public function delete()
+    public function delete(): bool
     {
         try {
-            $table = self::$dynamicTable ?? $this->table;
-            $sql = "DELETE FROM {$table} WHERE {$this->primaryKey} = :{$this->primaryKey}";
-            $stmt = $this->connection->prepare($sql);
+            $table = $this->resolveTable();
+            $sql   = "DELETE FROM {$this->g()->wrapTable($table)} WHERE {$this->primaryKey} = :{$this->primaryKey}";
+            $stmt  = $this->connection->prepare($sql);
             $stmt->bindValue(':' . $this->primaryKey, $this->attributes[$this->primaryKey]);
-            $stmt->execute();
+            return $stmt->execute();
         } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
+            $this->abort(500, $e->getMessage(), $e);
         }
     }
 
     public static function deleteWhere(array $conditions): bool
     {
         try {
-            $instance = new static;
-            $table = self::$dynamicTable ?? $instance->table;
-
-            $where = [];
-            $params = [];
-
+            $instance = new static();
+            $table    = static::$dynamicTable ?? $instance->table;
+            $where    = [];
+            $params   = [];
             foreach ($conditions as $field => $value) {
-                $where[] = "{$field} = :{$field}";
+                $where[]        = "{$field} = :{$field}";
                 $params[$field] = $value;
             }
-
-            $sql = "DELETE FROM {$table} WHERE " . implode(' AND ', $where);
+            $sql  = "DELETE FROM {$instance->g()->wrapTable($table)} WHERE " . implode(' AND ', $where);
             $stmt = $instance->connection->prepare($sql);
-
-            foreach ($params as $key => $val) {
-                $stmt->bindValue(':' . $key, $val);
-            }
-
+            foreach ($params as $k => $v) $stmt->bindValue(':' . $k, $v);
             return $stmt->execute();
         } catch (\Exception $e) {
             ErrorHandler::handleException($e);
@@ -1092,439 +784,385 @@ class BaseModel
         }
     }
 
-    public function deleteWithRelations(array $relations = [])
+    public function deleteWithRelations(array $relations = []): bool
     {
         try {
-            $this->connection = DB::getConnection();
-            $table = self::$dynamicTable ?? $this->table;
+            $this->connection  = DB::getConnection();
+            $table             = $this->resolveTable();
+            $localPrimaryVal   = $this->attributes[$this->primaryKey] ?? null;
+            $toDelete          = !empty($relations) ? $relations : array_keys($this->relations);
 
-            $relationsToDelete = !empty($relations) ? $relations : array_keys($this->relations);
-            $localPrimaryValue = $this->attributes[$this->primaryKey] ?? null;
+            foreach ($toDelete as $relationName) {
+                if (!method_exists($this, $relationName)) continue;
+                $info = $this->$relationName();
+                if (!is_array($info) || empty($info['model'])) continue;
 
-            foreach ($relationsToDelete as $relationName) {
-                if (!method_exists($this, $relationName)) {
-                    continue;
-                }
+                $relatedClass = is_object($info['model']) ? get_class($info['model']) : $info['model'];
+                $foreignKey   = $info['foreignKey'] ?? null;
+                $localKey     = $info['localKey'] ?? $info['ownerKey'] ?? $this->primaryKey;
+                $localValue   = $this->attributes[$localKey] ?? $localPrimaryVal;
 
-                $relationInfo = $this->$relationName();
-                if (!is_array($relationInfo) || empty($relationInfo['model'])) {
-                    continue;
-                }
+                if ($localValue === null || !$foreignKey) continue;
 
-                $relatedModel = $relationInfo['model'];
-                if (is_object($relatedModel)) {
-                    $relatedClass = get_class($relatedModel);
-                } else {
-                    $relatedClass = $relatedModel;
-                }
-
-                $foreignKey = $relationInfo['foreignKey'] ?? null;
-                $localKey = $relationInfo['localKey'] ?? $relationInfo['ownerKey'] ?? $this->primaryKey;
-
-                $localValue = $this->attributes[$localKey] ?? $localPrimaryValue;
-
-                if ($localValue === null) {
-                    continue;
-                }
-
-                switch ($relationInfo['type']) {
-                    case 'hasOne':
-                        $relatedTable = (new $relatedClass())->table ?? (new $relatedClass())->getTableName() ?? null;
-                        if (!$relatedTable && property_exists($relatedClass, 'table')) {
-                            $relatedTable = $relatedClass::$table;
-                        }
-
-                        if ($relatedTable && $foreignKey) {
-                            $sql = "DELETE FROM {$relatedTable} WHERE {$foreignKey} = :val";
-                            $stmt = $this->connection->prepare($sql);
-                            $stmt->bindValue(':val', $localValue);
-                            $stmt->execute();
-                        }
-                        break;
-
-                    case 'hasMany':
-                        $relatedTable = (new $relatedClass())->table ?? (new $relatedClass())->getTableName() ?? null;
-                        if (!$relatedTable && property_exists($relatedClass, 'table')) {
-                            $relatedTable = $relatedClass::$table;
-                        }
-
-                        if ($relatedTable && $foreignKey) {
-                            $sql = "DELETE FROM {$relatedTable} WHERE {$foreignKey} = :val";
-                            $stmt = $this->connection->prepare($sql);
-                            $stmt->bindValue(':val', $localValue);
-                            $stmt->execute();
-                        }
-                        break;
-
-                    case 'belongsTo':
-                        // kalo dibutuhkan dan ingin cascade, uncomment dan sesuaikan saja ya genksssss anjay mabar:
-                        /*
-                        $owner = $this->relations[$relationName] ?? null;
-                        if ($owner && method_exists($owner, 'deleteWithRelations')) {
-                            $owner->deleteWithRelations();
-                        } elseif ($owner && method_exists($owner, 'delete')) {
-                            $owner->delete();
-                        }
-                        */
-                        break;
+                if (in_array($info['type'], ['hasOne', 'hasMany'], true)) {
+                    $relTable = (new $relatedClass())->table ?? null;
+                    if ($relTable) {
+                        $sql  = "DELETE FROM {$this->g()->wrapTable($relTable)} WHERE {$foreignKey} = :val";
+                        $stmt = $this->connection->prepare($sql);
+                        $stmt->bindValue(':val', $localValue);
+                        $stmt->execute();
+                    }
                 }
             }
 
-            if (isset($this->attributes[$this->primaryKey])) {
-                $sql = "DELETE FROM {$table} WHERE {$this->primaryKey} = :pk";
+            if ($localPrimaryVal !== null) {
+                $sql  = "DELETE FROM {$this->g()->wrapTable($table)} WHERE {$this->primaryKey} = :pk";
                 $stmt = $this->connection->prepare($sql);
-                $stmt->bindValue(':pk', $this->attributes[$this->primaryKey]);
+                $stmt->bindValue(':pk', $localPrimaryVal);
                 $stmt->execute();
             }
-
             return true;
+
         } catch (\Exception $e) {
-            if (env('APP_DEBUG') == 'false') {
-                if (Request::isAjax() || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {
-                    header('Content-Type: application/json', true, 500);
-                    echo json_encode([
-                        'statusCode' => 500,
-                        'error'      => 'Internal Server Error'
-                    ]);
-                } else {
-                    return View::error(500);
-                }
-                exit;
-            }
-            ErrorHandler::handleException($e);
+            $this->abort(500, $e->getMessage(), $e);
         }
     }
 
-    public function lockForUpdate()
+    // =========================================================================
+    // LOCKING
+    // =========================================================================
+
+    public function lockForUpdate(): array
     {
-        if (empty($this->table)) {
-            $this->table = 'default_table';
-        }
-        $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$this->table}";
-
-        if (!empty($this->joins)) {
-            $sql .= ' ' . implode(' ', $this->joins);
-        }
-
-        if (!empty($this->whereConditions) || !empty($this->orWhereConditions)) {
-            $sql .= ' WHERE ';
-            $conditions = [];
-
-            if (!empty($this->whereConditions)) {
-                $conditions[] = '(' . implode(' AND ', $this->whereConditions) . ')';
-            }
-
-            if (!empty($this->orWhereConditions)) {
-                $conditions[] = '(' . implode(' OR ', $this->orWhereConditions) . ')';
-            }
-
-            $sql .= implode(' AND ', $conditions);
-        }
-
-        $sql .= ' FOR UPDATE';
-
+        $sql  = $this->compileLockSelect($this->g()->lockForUpdate());
         $stmt = $this->connection->prepare($sql);
-
-        foreach ($this->whereParams as $key => $value) {
-            $stmt->bindValue($key, $value);
-        }
-
-        $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_OBJ);
-    }
-    public function sharedLock()
-    {
-        if (empty($this->table)) {
-            $this->table = 'default_table';
-        }
-        $sql = "SELECT {$this->distinct} " . implode(', ', $this->selectColumns) . " FROM {$this->table}";
-
-        if (!empty($this->joins)) {
-            $sql .= ' ' . implode(' ', $this->joins);
-        }
-
-        if (!empty($this->whereConditions) || !empty($this->orWhereConditions)) {
-            $sql .= ' WHERE ';
-            $conditions = [];
-
-            if (!empty($this->whereConditions)) {
-                $conditions[] = '(' . implode(' AND ', $this->whereConditions) . ')';
-            }
-
-            if (!empty($this->orWhereConditions)) {
-                $conditions[] = '(' . implode(' OR ', $this->orWhereConditions) . ')';
-            }
-
-            $sql .= implode(' AND ', $conditions);
-        }
-
-        $sql .= ' LOCK IN SHARE MODE';
-
-        $stmt = $this->connection->prepare($sql);
-
-        foreach ($this->whereParams as $key => $value) {
-            $stmt->bindValue($key, $value);
-        }
-
+        $this->bindAll($stmt);
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_OBJ);
     }
 
-    public static function find($id, $fetchStyle = PDO::FETCH_OBJ)
+    public function sharedLock(): array
     {
-        $instance = new static();
-        $table = self::$dynamicTable ?? $instance->table;
-        $sql = "SELECT * FROM {$table} WHERE {$instance->primaryKey} = :id";
-        $stmt = $instance->connection->prepare($sql);
-        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $sql  = $this->compileLockSelect($this->g()->lockForShare());
+        $stmt = $this->connection->prepare($sql);
+        $this->bindAll($stmt);
         $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_OBJ);
+    }
 
-        $data = $stmt->fetch($fetchStyle);
-
-        if ($data) {
-            return new static((array) $data);
+    private function compileLockSelect(string $lockHint): string
+    {
+        // SQL Server: hint masuk setelah nama tabel (WITH (...)), bukan di akhir
+        if ($this->g()->driverName() === 'sqlsrv') {
+            $table   = $this->resolveTable();
+            $wrapped = $this->g()->wrapTable($table);
+            $cols    = implode(', ', $this->selectColumns);
+            $sql     = "SELECT {$this->distinct} {$cols} FROM {$wrapped}{$lockHint}";
+            if (!empty($this->joins))   $sql .= ' ' . implode(' ', $this->joins);
+            $sql .= $this->buildWhereClause();
+            if ($this->groupBy)         $sql .= " GROUP BY {$this->groupBy}";
+            if (!empty($this->orderBy)) $sql .= ' ORDER BY ' . implode(', ', $this->orderBy);
+            return $sql;
         }
-
-        return null;
+        // MySQL / PostgreSQL: hint di akhir query
+        return $this->compileSelect() . $lockHint;
     }
 
-    public function hasOne($relatedModel, $foreignKey, $localKey = 'id')
+    // =========================================================================
+    // RELATIONS
+    // =========================================================================
+
+    public function hasOne(string $relatedModel, string $foreignKey, string $localKey = 'id'): array
     {
+        return ['type' => 'hasOne', 'model' => new $relatedModel(), 'foreignKey' => $foreignKey, 'localKey' => $localKey];
+    }
+
+    public function hasMany(string $relatedModel, string $foreignKey, string $localKey = 'id'): array
+    {
+        return ['type' => 'hasMany', 'model' => new $relatedModel(), 'foreignKey' => $foreignKey, 'localKey' => $localKey];
+    }
+
+    public function belongsTo(string $relatedModel, string $foreignKey, string $ownerKey = 'id'): array
+    {
+        return ['type' => 'belongsTo', 'model' => new $relatedModel(), 'foreignKey' => $foreignKey, 'ownerKey' => $ownerKey];
+    }
+
+    public function belongsToMany(
+        string $relatedModel, string $pivotTable,
+        string $foreignKey, string $relatedKey,
+        string $localKey = 'id', string $relatedLocalKey = 'id'
+    ): array {
         return [
-            'type' => 'hasOne',
-            'model' => new $relatedModel(),
-            'foreignKey' => $foreignKey,
-            'localKey' => $localKey,
+            'type' => 'belongsToMany', 'model' => new $relatedModel(), 'pivot' => $pivotTable,
+            'foreignKey' => $foreignKey, 'relatedKey' => $relatedKey,
+            'localKey' => $localKey, 'relatedLocalKey' => $relatedLocalKey,
         ];
     }
 
-    public function hasMany($relatedModel, $foreignKey, $localKey = 'id')
+    public function with(string|array $relations): static
     {
-        return [
-            'type' => 'hasMany',
-            'model' => new $relatedModel(),
-            'foreignKey' => $foreignKey,
-            'localKey' => $localKey,
-        ];
-    }
-
-    public function belongsTo($relatedModel, $foreignKey, $ownerKey = 'id')
-    {
-        return [
-            'type' => 'belongsTo',
-            'model' => new $relatedModel(),
-            'foreignKey' => $foreignKey,
-            'ownerKey' => $ownerKey,
-        ];
-    }
-
-    public function belongsToMany($relatedModel, $pivotTable, $foreignKey, $relatedKey, $localKey = 'id', $relatedLocalKey = 'id')
-    {
-        return [
-            'type' => 'belongsToMany',
-            'model' => new $relatedModel(),
-            'pivot' => $pivotTable,
-            'foreignKey' => $foreignKey,
-            'relatedKey' => $relatedKey,
-            'localKey' => $localKey,
-            'relatedLocalKey' => $relatedLocalKey,
-        ];
-    }
-
-    public static function exists($conditions)
-    {
-        $query = static::query();
-
-        foreach ($conditions as $field => $value) {
-            $query->where($field, '=', $value);
+        foreach ((array) $relations as $rel) {
+            if (!method_exists($this, $rel)) {
+                throw new \Exception("Relation [{$rel}] not defined in " . static::class);
+            }
         }
-
-        $result = $query->first();
-
-        return $result !== null;
-    }
-    
-    public function with($relation)
-    {
-        if (!method_exists($this, $relation)) {
-            throw new \Exception("Relation {$relation} not defined in " . static::class);
-        }
-
-        $this->$relation = $this->$relation();
+        $this->with = array_merge($this->with, (array) $relations);
         return $this;
     }
 
-
-    public function load(array $relations)
+    public function load(array $relations): static
     {
         foreach ($relations as $relation) {
             if (!method_exists($this, $relation)) continue;
+            $info    = $this->$relation();
+            if (!is_array($info)) continue;
+            $related = $info['model'];
 
-            $relationInfo = $this->$relation();
-            if (!is_array($relationInfo)) continue;
-
-            $relatedModel = $relationInfo['model'];
-
-            switch ($relationInfo['type']) {
+            switch ($info['type']) {
                 case 'belongsTo':
-                    $foreignKey = $relationInfo['foreignKey'];
-                    $ownerKey   = $relationInfo['ownerKey'];
-
-                    if (isset($this->attributes[$foreignKey])) {
-                        $this->relations[$relation] = $relatedModel::query()
-                            ->where($ownerKey, '=', $this->attributes[$foreignKey])
+                    if (isset($this->attributes[$info['foreignKey']])) {
+                        $this->relations[$relation] = $related::query()
+                            ->where($info['ownerKey'], '=', $this->attributes[$info['foreignKey']])
                             ->first();
                     }
                     break;
 
                 case 'hasOne':
-                    $foreignKey = $relationInfo['foreignKey'];
-                    $localKey   = $relationInfo['localKey'];
-
-                    if (isset($this->attributes[$localKey])) {
-                        $this->relations[$relation] = $relatedModel::query()
-                            ->where($foreignKey, '=', $this->attributes[$localKey])
+                    if (isset($this->attributes[$info['localKey']])) {
+                        $this->relations[$relation] = $related::query()
+                            ->where($info['foreignKey'], '=', $this->attributes[$info['localKey']])
                             ->first();
                     }
                     break;
 
                 case 'hasMany':
-                    $foreignKey = $relationInfo['foreignKey'];
-                    $localKey   = $relationInfo['localKey'];
-
-                    if (isset($this->attributes[$localKey])) {
-                        $this->relations[$relation] = $relatedModel::query()
-                            ->where($foreignKey, '=', $this->attributes[$localKey])
+                    if (isset($this->attributes[$info['localKey']])) {
+                        $this->relations[$relation] = $related::query()
+                            ->where($info['foreignKey'], '=', $this->attributes[$info['localKey']])
                             ->get();
                     }
                     break;
 
                 case 'belongsToMany':
-                    $pivotTable       = $relationInfo['pivot'];
-                    $foreignKey       = $relationInfo['foreignKey'];
-                    $relatedKey       = $relationInfo['relatedKey'];
-                    $localKey         = $relationInfo['localKey'];
-                    $relatedLocalKey  = $relationInfo['relatedLocalKey'];
-
-                    if (!isset($this->attributes[$localKey])) break;
-
+                    if (!isset($this->attributes[$info['localKey']])) break;
                     $conn = DB::getConnection();
-                    $sql = "
-                        SELECT r.* 
-                        FROM {$relatedModel->table} AS r
-                        INNER JOIN {$pivotTable} AS p
-                            ON p.{$relatedKey} = r.{$relatedLocalKey}
-                        WHERE p.{$foreignKey} = :localKey
+                    $g    = static::$grammar;
+                    $sql  = "
+                        SELECT r.*
+                        FROM {$g->wrapTable($related->table)} AS r
+                        INNER JOIN {$g->wrapTable($info['pivot'])} AS p
+                            ON p.{$info['relatedKey']} = r.{$info['relatedLocalKey']}
+                        WHERE p.{$info['foreignKey']} = :_lk
                     ";
                     $stmt = $conn->prepare($sql);
-                    $stmt->bindValue(':localKey', $this->attributes[$localKey]);
+                    $stmt->bindValue(':_lk', $this->attributes[$info['localKey']]);
                     $stmt->execute();
-
-                    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    $relatedData = [];
-                    foreach ($rows as $row) {
-                        $instance = new $relatedModel();
-                        $instance->fill($row);
-                        $relatedData[] = $instance;
-                    }
-
-                    $this->relations[$relation] = $relatedData;
+                    $this->relations[$relation] = array_map(function($row) use ($related) {
+                        $inst = new $related();
+                        $inst->fill($row);
+                        return $inst;
+                    }, $stmt->fetchAll(PDO::FETCH_ASSOC));
                     break;
             }
         }
-
         $this->with = $relations;
         return $this;
     }
 
-    public function toCleanArray()
+    public function saveWithRelations(array $relations = []): static
     {
-        $data = [];
+        $this->save();
+        $toSave = !empty($relations) ? $relations : array_keys($this->relations);
 
-        foreach ($this->attributes as $key => $value) {
-            $data[$key] = $value;
-        }
+        foreach ($toSave as $name) {
+            if (!isset($this->relations[$name])) continue;
+            $info = $this->$name();
+            $data = $this->relations[$name];
 
-        foreach ($this->relations as $relation => $relValue) {
-            if ($relValue instanceof self) {
-                $data[$relation] = $relValue->toCleanArray();
-            } elseif (is_array($relValue)) {
-                $data[$relation] = array_map(function ($item) {
-                    return $item instanceof self ? $item->toCleanArray() : $item;
-                }, $relValue);
-            } else {
-                $data[$relation] = $relValue;
+            switch ($info['type']) {
+                case 'hasOne':
+                    $data->{$info['foreignKey']} = $this->attributes[$info['localKey']];
+                    $data->save();
+                    break;
+                case 'hasMany':
+                    foreach ($data as $item) {
+                        $item->{$info['foreignKey']} = $this->attributes[$info['localKey']];
+                        $item->save();
+                    }
+                    break;
+                case 'belongsTo':
+                    $data->save();
+                    $this->attributes[$info['foreignKey']] = $data->{$info['ownerKey']};
+                    $this->save();
+                    break;
             }
         }
-
-        if (property_exists($this, 'hidden') && !empty($this->hidden)) {
-            foreach ($this->hidden as $field) unset($data[$field]);
-        }
-
-        return $data;
+        return $this;
     }
 
+    // =========================================================================
+    // TABLE HELPERS
+    // =========================================================================
 
-    public static function toCleanArrayCollection($models)
+    public static function setCustomTable(string $table): static
     {
-        if (!is_array($models)) return [];
-        return array_map(fn($item) => $item instanceof self ? $item->toCleanArray() : $item, $models);
+        static::$dynamicTable = $table;
+        return new static();
     }
 
-    public function toArray()
+    public static function setTable(string $suffix): static
+    {
+        $instance = new static();
+        static::$dynamicTable = $instance->table . $suffix;
+        return new static();
+    }
+
+    // =========================================================================
+    // DEBUG
+    // =========================================================================
+
+    public function toSql(): string
+    {
+        return $this->compileSelect();
+    }
+
+    public function getRawSQL(): string
+    {
+        $sql = $this->toSql();
+        foreach ($this->whereParams as $key => $value) {
+            $replacement = match(true) {
+                is_null($value)   => 'NULL',
+                is_bool($value)   => $value ? '1' : '0',
+                is_string($value) => "'" . addslashes($value) . "'",
+                default           => (string) $value,
+            };
+            $sql = str_replace($key, $replacement, $sql);
+        }
+        return $sql;
+    }
+
+    // =========================================================================
+    // SERIALIZATION
+    // =========================================================================
+
+    public function toCleanArray(): array
     {
         $data = $this->attributes;
-
-        foreach (get_object_vars($this) as $key => $value) {
-            if (!in_array($key, [
-                'table','primaryKey','fillable','guarded','attributes',
-                'connection','selectColumns','whereConditions','whereParams',
-                'joins','groupBy','orderBy','distinct','limit','offset','orWhereConditions'
-            ])) {
-                if ($value instanceof BaseModel) {
-                    $data[$key] = $value->toArray();
-                } elseif (is_array($value)) {
-                    $data[$key] = array_map(function($item) {
-                        return $item instanceof BaseModel ? $item->toArray() : $item;
-                    }, $value);
-                } else {
-                    $data[$key] = $value;
-                }
-            }
+        foreach ($this->relations as $rel => $val) {
+            $data[$rel] = $val instanceof self
+                ? $val->toCleanArray()
+                : (is_array($val)
+                    ? array_map(fn($i) => $i instanceof self ? $i->toCleanArray() : $i, $val)
+                    : $val);
         }
-
+        if (property_exists($this, 'hidden')) {
+            foreach ($this->hidden as $f) unset($data[$f]);
+        }
         return $data;
     }
 
-    public function getPrimaryKey()
+    public static function toCleanArrayCollection(array $models): array
     {
-        return $this->primaryKey ?? 'id';
+        return array_map(fn($m) => $m instanceof self ? $m->toCleanArray() : $m, $models);
     }
 
-    public function __get($key)
+    public function toArray(): array
     {
-        if (array_key_exists($key, $this->relations)) {
-            return $this->relations[$key];
+        $skip = ['table','primaryKey','fillable','guarded','attributes','connection',
+                 'selectColumns','whereConditions','whereParams','joins','groupBy',
+                 'orderBy','distinct','limit','offset','orWhereConditions','with','relations'];
+        $data = $this->attributes;
+        foreach (get_object_vars($this) as $k => $v) {
+            if (in_array($k, $skip, true)) continue;
+            $data[$k] = $v instanceof self ? $v->toArray()
+                : (is_array($v) ? array_map(fn($i) => $i instanceof self ? $i->toArray() : $i, $v) : $v);
         }
-        if (array_key_exists($key, $this->attributes)) {
-            return $this->attributes[$key];
-        }
+        return $data;
+    }
+
+    public function getPrimaryKey(): string { return $this->primaryKey; }
+
+    // =========================================================================
+    // MAGIC
+    // =========================================================================
+
+    public function __get(string $key): mixed
+    {
+        if (array_key_exists($key, $this->relations))  return $this->relations[$key];
+        if (array_key_exists($key, $this->attributes)) return $this->attributes[$key];
         if (method_exists($this, $key)) {
             $this->load([$key]);
             return $this->relations[$key] ?? null;
         }
-
         return null;
     }
 
-    public function __set($key, $value)
+    public function __set(string $key, mixed $value): void
     {
-        if ($value instanceof BaseModel || (is_array($value) && isset($value[0]) && $value[0] instanceof BaseModel)) {
+        if ($value instanceof self || (is_array($value) && !empty($value) && $value[0] instanceof self)) {
             $this->relations[$key] = $value;
         } else {
             $this->attributes[$key] = $value;
         }
     }
 
+    // =========================================================================
+    // PRIVATE / PROTECTED HELPERS
+    // =========================================================================
 
+    private function resolveTable(): string
+    {
+        return static::$dynamicTable ?? $this->table;
+    }
+
+    private function uniqueParam(string $column): string
+    {
+        return str_replace(['.', ' ', '-'], '_', $column) . '_' . count($this->whereParams);
+    }
+
+    private function buildWhereClause(): string
+    {
+        if (empty($this->whereConditions) && empty($this->orWhereConditions)) return '';
+        $parts = [];
+        if (!empty($this->whereConditions))   $parts[] = '(' . implode(' AND ', $this->whereConditions) . ')';
+        if (!empty($this->orWhereConditions)) $parts[] = '(' . implode(' OR ',  $this->orWhereConditions) . ')';
+        return ' WHERE ' . implode(' AND ', $parts);
+    }
+
+    private function compileSelect(): string
+    {
+        return $this->g()->buildSelect(
+            $this->distinct,
+            $this->selectColumns,
+            $this->resolveTable(),
+            $this->joins,
+            $this->buildWhereClause(),
+            $this->groupBy ?? '',
+            $this->orderBy,
+            $this->limit,
+            $this->offset
+        );
+    }
+
+    private function bindAll(\PDOStatement $stmt): void
+    {
+        foreach ($this->whereParams as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
+    }
+
+    private function applyClosureWhere(\Closure $closure, array &$targetConditions, array &$targetParams): static
+    {
+        $sub = new static();
+        $closure($sub);
+        $parts = [];
+        if (!empty($sub->whereConditions))   $parts[] = implode(' AND ', $sub->whereConditions);
+        if (!empty($sub->orWhereConditions)) $parts[] = implode(' OR ',  $sub->orWhereConditions);
+        $combined = implode(' OR ', array_filter($parts));
+        if (!empty($combined)) {
+            $targetConditions[] = '(' . $combined . ')';
+            $targetParams       = array_merge($targetParams, $sub->whereParams);
+        }
+        return $this;
+    }
 }

@@ -2,19 +2,18 @@
 
 namespace Bpjs\Framework\Database\Grammar;
 
-class MySqlGrammar implements GrammarInterface
+class SQLiteGrammar implements GrammarInterface
 {
-    public function driverName(): string { return 'mysql'; }
+    public function driverName(): string { return 'sqlite'; }
 
     public function wrapIdentifier(string $name): string
     {
         if ($name === '*') return '*';
-        return '`' . str_replace('`', '``', $name) . '`';
+        return '"' . str_replace('"', '""', $name) . '"';
     }
 
     public function wrapTable(string $table): string
     {
-        // support schema.table
         return implode('.', array_map(
             fn($p) => $this->wrapIdentifier($p),
             explode('.', $table)
@@ -36,10 +35,10 @@ class MySqlGrammar implements GrammarInterface
     ): string {
         $cols = implode(', ', $columns);
         $sql  = "SELECT {$distinct} {$cols} FROM {$this->wrapTable($table)}";
-        if ($joins)      $sql .= ' ' . implode(' ', $joins);
+        if ($joins)       $sql .= ' ' . implode(' ', $joins);
         if ($whereClause) $sql .= $whereClause;
-        if ($groupBy)    $sql .= " GROUP BY {$groupBy}";
-        if ($orderBy)    $sql .= ' ORDER BY ' . implode(', ', $orderBy);
+        if ($groupBy)     $sql .= " GROUP BY {$groupBy}";
+        if ($orderBy)     $sql .= ' ORDER BY ' . implode(', ', $orderBy);
         $sql .= $this->buildLimitOffset($limit, $offset);
         return $sql;
     }
@@ -59,14 +58,22 @@ class MySqlGrammar implements GrammarInterface
         return $pdo->lastInsertId() ?: null;
     }
 
-    public function lockForUpdate(): string { return ' FOR UPDATE'; }
-    public function lockForShare(): string  { return ' LOCK IN SHARE MODE'; }
+    // SQLite tidak support row-level lock — diabaikan agar tidak error
+    public function lockForUpdate(): string { return ''; }
+    public function lockForShare(): string  { return ''; }
 
-    public function monthExpr(string $column): string { return "MONTH({$column})"; }
-    public function yearExpr(string $column): string  { return "YEAR({$column})"; }
+    public function monthExpr(string $column): string
+    {
+        return "CAST(strftime('%m', {$column}) AS INTEGER)";
+    }
+
+    public function yearExpr(string $column): string
+    {
+        return "CAST(strftime('%Y', {$column}) AS INTEGER)";
+    }
 
     public function dateExpr(string $column, string $paramName): string
     {
-        return "DATE({$column}) = :{$paramName}";
+        return "date({$column}) = :{$paramName}";
     }
 }
