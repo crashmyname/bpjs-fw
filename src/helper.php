@@ -1,6 +1,6 @@
 <?php
 use App\Models\User;
-use Bpjs\Core\Cache;
+use Bpjs\Framework\Core\Cache;
 use Bpjs\Framework\Helpers\Live\LiveRenderer;
 use Bpjs\Framework\Helpers\Session\SessionManager;
 use Bpjs\Framework\Helpers\Route;
