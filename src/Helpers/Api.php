@@ -1,7 +1,7 @@
 <?php
 namespace Bpjs\Framework\Helpers;
 
-use Bpjs\Core\Request;
+use Bpjs\Framework\Core\Request;
 use Bpjs\Framework\Helpers\View;
 
 class Api
@@ -134,7 +134,7 @@ class Api
     }
 
     // Dispatch routing
-    public static function dispatch(): \Bpjs\Core\Response
+    public static function dispatch(): \Bpjs\Framework\Core\Response
     {
         try {
 
@@ -160,7 +160,7 @@ class Api
                 $middlewares = $route['middlewares'];
                 $params = $route['params'] ?? [];
 
-                $request = new \Bpjs\Core\Request();
+                $request = new \Bpjs\Framework\Core\Request();
 
                 // Middleware
                 foreach ($middlewares as $middleware) {
@@ -180,7 +180,7 @@ class Api
                     $controllerInstance = new $controller();
                     $reflection = new \ReflectionMethod($controllerInstance, $method);
                     $parameters = $reflection->getParameters();
-                    if (isset($parameters[0]) && $parameters[0]->getType()?->getName() === \Bpjs\Core\Request::class) {
+                    if (isset($parameters[0]) && $parameters[0]->getType()?->getName() === \Bpjs\Framework\Core\Request::class) {
                         array_unshift($params, $request);
                     }
                     $result = call_user_func_array([$controllerInstance, $method], $params);
@@ -188,22 +188,22 @@ class Api
                     $result = call_user_func_array($handler, $params);
                 }
 
-                return $result instanceof \Bpjs\Core\Response
+                return $result instanceof \Bpjs\Framework\Core\Response
                     ? $result
-                    : new \Bpjs\Core\Response($result);
+                    : new \Bpjs\Framework\Core\Response($result);
             }
 
             // Route tidak ditemukan
             ob_start();
             include BPJS_BASE_PATH . '/app/handle/errors/404.php';
             $content = ob_get_clean();
-            return new \Bpjs\Core\Response($content, 404);
+            return new \Bpjs\Framework\Core\Response($content, 404);
 
         } catch (\Throwable $e) {
             ob_start();
             include BPJS_BASE_PATH . '/app/handle/errors/500.php';
             $content = ob_get_clean();
-            return new \Bpjs\Core\Response($content, 500);
+            return new \Bpjs\Framework\Core\Response($content, 500);
         }
     }
 

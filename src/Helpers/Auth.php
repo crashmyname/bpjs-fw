@@ -3,7 +3,7 @@
 namespace Bpjs\Framework\Helpers;
 
 use App\Models\User;
-use Bpjs\Core\Request;
+use Bpjs\Framework\Core\Request;
 use Bpjs\Framework\Helpers\Session;
 use Middlewares\SessionMiddleware;
 use Middlewares\Throttle;

@@ -467,26 +467,26 @@ function serve_secure_file()
     $token = $_GET['token'] ?? null;
 
     if (!$token) {
-        return new \Bpjs\Core\Response('Missing token', 400);
+        return new \Bpjs\Framework\Core\Response('Missing token', 400);
     }
 
     $decoded = Bpjs\Framework\Helpers\Crypto::decrypt($token);
     if (!$decoded) {
-        return new \Bpjs\Core\Response('Invalid token', 403);
+        return new \Bpjs\Framework\Core\Response('Invalid token', 403);
     }
 
     $data = json_decode($decoded, true);
     if (!$data || !isset($data['f'], $data['exp'])) {
-        return new \Bpjs\Core\Response('Invalid token data', 403);
+        return new \Bpjs\Framework\Core\Response('Invalid token data', 403);
     }
 
     if (time() > $data['exp']) {
-        return new \Bpjs\Core\Response('Token expired', 403);
+        return new \Bpjs\Framework\Core\Response('Token expired', 403);
     }
 
     $filepath = storage_path($data['f']);
     if (!file_exists($filepath)) {
-        return new \Bpjs\Core\Response('File not found', 404);
+        return new \Bpjs\Framework\Core\Response('File not found', 404);
     }
 
     header('Content-Type: ' . mime_content_type($filepath));

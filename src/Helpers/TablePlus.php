@@ -39,12 +39,11 @@ class TablePlus
 
         $host = $_ENV['DB_HOST'] ?? '127.0.0.1';
         $db   = $_ENV['DB_DATABASE'] ?? 'koperasi_stanley';
-        $port   = $_ENV['DB_PORT'] ?? 3306;
         $user = $_ENV['DB_USERNAME'] ?? 'root';
         $pass = $_ENV['DB_PASSWORD'] ?? '';
         $charset = $_ENV['DB_CHARSET'] ?? 'utf8mb4';
 
-        $dsn = "mysql:host={$host};port={$port};dbname={$db};charset={$charset}";
+        $dsn = "mysql:host={$host};dbname={$db};charset={$charset}";
         try {
             $newPdo = new PDO($dsn, $user, $pass, [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -91,6 +90,70 @@ class TablePlus
         return $this;
     }
 
+    public function where(string $column, string $operator, $value): self
+    {
+        $ph = ":w_" . count($this->bindings);
+
+        $this->wheres[] = [
+            'boolean' => 'AND',
+            'sql' => "{$column} {$operator} {$ph}"
+        ];
+
+        $this->bindings[$ph] = $value;
+
+        return $this;
+    }
+
+    public function orWhere(string $column, string $operator, $value): self
+    {
+        $ph = ":w_" . count($this->bindings);
+
+        $this->wheres[] = [
+            'boolean' => 'OR',
+            'sql' => "{$column} {$operator} {$ph}"
+        ];
+
+        $this->bindings[$ph] = $value;
+
+        return $this;
+    }
+
+    public function whereIn(string $column, array $values): self
+    {
+        if (empty($values)) return $this;
+
+        $placeholders = [];
+
+        foreach ($values as $i => $v) {
+            $ph = ":w_" . count($this->bindings) . "_{$i}";
+            $placeholders[] = $ph;
+            $this->bindings[$ph] = $v;
+        }
+
+        $this->wheres[] = [
+            'boolean' => 'AND',
+            'sql' => "{$column} IN (" . implode(',', $placeholders) . ")"
+        ];
+
+        return $this;
+    }
+
+    public function whereBetween(string $column, $start, $end): self
+    {
+        $ph1 = ":w_" . count($this->bindings) . "_start";
+        $ph2 = ":w_" . count($this->bindings) . "_end";
+
+        $this->wheres[] = [
+            'boolean' => 'AND',
+            'sql' => "{$column} BETWEEN {$ph1} AND {$ph2}"
+        ];
+
+        $this->bindings[$ph1] = $start;
+        $this->bindings[$ph2] = $end;
+
+        return $this;
+    }
+
     public function orderBy(string $column, string $direction = 'ASC'): self
     {
         $this->orderBy = $column;
@@ -110,6 +173,14 @@ class TablePlus
         $whereClauses = [];
         $bindings = $this->bindings;
 
+        foreach ($this->wheres as $i => $where) {
+            if ($i === 0) {
+                $whereClauses[] = $where['sql'];
+            } else {
+                $whereClauses[] = $where['boolean'] . ' ' . $where['sql'];
+            }
+        }
+        
         foreach ($this->filters as $column => $value) {
 
             if ($value === '' || $value === null) continue;

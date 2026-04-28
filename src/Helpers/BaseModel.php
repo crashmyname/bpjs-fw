@@ -2,7 +2,7 @@
 
 namespace Bpjs\Framework\Helpers;
 
-use Bpjs\Core\Request;
+use Bpjs\Framework\Core\Request;
 use Bpjs\Framework\Database\Grammar\GrammarFactory;
 use Bpjs\Framework\Database\Grammar\GrammarInterface;
 use PDO;

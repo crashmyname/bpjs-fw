@@ -1,7 +1,7 @@
 <?php
 namespace Bpjs\Framework\Helpers;
 
-use Bpjs\Core\Request;
+use Bpjs\Framework\Core\Request;
 use Exception;
 use Helpers\View;
 use Middlewares\SessionMiddleware;
@@ -188,7 +188,7 @@ class Route
         return self::$currentRoute;
     }
 
-    public static function dispatch(): \Bpjs\Core\Response
+    public static function dispatch(): \Bpjs\Framework\Core\Response
     {
         try {
             SessionMiddleware::start();
@@ -208,9 +208,9 @@ class Route
             $cacheKey = 'route_' . md5($method . $uri);
 
             if ($method === 'GET') {
-                $cached = \Bpjs\Core\Cache::get($cacheKey);
+                $cached = \Bpjs\Framework\Core\Cache::get($cacheKey);
                 if ($cached) {
-                    return new \Bpjs\Core\Response($cached);
+                    return new \Bpjs\Framework\Core\Response($cached);
                 }
             }
             $route = self::findRoute($method, $uri);
@@ -226,7 +226,7 @@ class Route
                 $middlewares = $route['middlewares'];
                 $params = $route['params'] ?? [];
 
-                $request = new \Bpjs\Core\Request();
+                $request = new \Bpjs\Framework\Core\Request();
 
                 foreach ($middlewares as $middleware) {
 
@@ -251,13 +251,13 @@ class Route
                 if ($method === 'POST') {
                     $csrfToken = $request->get('csrf_token') ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
                     if (empty($csrfToken) || !isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $csrfToken)) {
-                        return new \Bpjs\Core\Response('Invalid CSRF Token', 419);
+                        return new \Bpjs\Framework\Core\Response('Invalid CSRF Token', 419);
                     }
                 }
 
                 if (is_array($handler) && count($handler) === 2) {
                     [$controller, $method] = $handler;
-                    $container = new \Bpjs\Core\Container();
+                    $container = new \Bpjs\Framework\Core\Container();
                     $controllerInstance = $container->make($controller);
 
                     $key = $controller . '@' . $method;
@@ -275,7 +275,7 @@ class Route
                         if ($type) {
                             $className = $type->getName();
 
-                            if ($className === \Bpjs\Core\Request::class) {
+                            if ($className === \Bpjs\Framework\Core\Request::class) {
                                 $methodParams[] = $request;
                             } else {
                                 $methodParams[] = $container->make($className);
@@ -290,16 +290,16 @@ class Route
                     $result = call_user_func_array($handler, $params);
                 }
 
-                if ($result instanceof \Bpjs\Core\Response) {
+                if ($result instanceof \Bpjs\Framework\Core\Response) {
                     return $result;
                 }
 
-                $response = $result instanceof \Bpjs\Core\Response
+                $response = $result instanceof \Bpjs\Framework\Core\Response
                     ? $result
-                    : new \Bpjs\Core\Response($result);
+                    : new \Bpjs\Framework\Core\Response($result);
 
                 if ($method === 'GET' && $response->getStatusCode() === 200) {
-                    \Bpjs\Core\Cache::put($cacheKey, $response->getContent(), 60);
+                    \Bpjs\Framework\Core\Cache::put($cacheKey, $response->getContent(), 60);
                 }
 
                 return $response;
@@ -308,7 +308,7 @@ class Route
             ob_start();
             include BPJS_BASE_PATH . '/app/handle/errors/404.php';
             $content = ob_get_clean();
-            return new \Bpjs\Core\Response($content, 404);
+            return new \Bpjs\Framework\Core\Response($content, 404);
 
         } catch (\Throwable $e) {
             if (env('APP_DEBUG') === 'true') {
@@ -319,7 +319,7 @@ class Route
                 Request::isAjax() ||
                 (isset($_SERVER['HTTP_ACCEPT']) && str_contains($_SERVER['HTTP_ACCEPT'], 'application/json'))
             ) {
-                return new \Bpjs\Core\Response(
+                return new \Bpjs\Framework\Core\Response(
                     json_encode([
                         'statusCode' => 500,
                         'error' => 'Internal Server Error'

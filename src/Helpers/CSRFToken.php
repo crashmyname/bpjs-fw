@@ -1,7 +1,7 @@
 <?php
 namespace Bpjs\Framework\Helpers;
 
-use Bpjs\Core\Request;
+use Bpjs\Framework\Core\Request;
 
 class CSRFToken {
     public static function generateToken() {

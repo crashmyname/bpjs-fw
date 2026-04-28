@@ -1,7 +1,7 @@
 <?php
 
 namespace Bpjs\Framework\Helpers;
-use Bpjs\Core\Request;
+use Bpjs\Framework\Core\Request;
 use Bpjs\Framework\Helpers\View;
 use Bpjs\Framework\Helpers\QueryLogger;
 use Bpjs\Framework\Helpers\Route;
