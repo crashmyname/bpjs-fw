@@ -692,3 +692,20 @@ function queue($class, array $data = [], $method = 'handle')
         'pending'
     ]);
 }
+
+if (!function_exists('validate_app_key')) {
+    function validate_app_key(?string $key): bool
+    {
+        if (empty($key)) {
+            return false;
+        }
+
+        if (str_starts_with($key, 'base64:')) {
+            $key = substr($key, 7);
+        }
+
+        $decoded = base64_decode($key, true);
+
+        return $decoded !== false && strlen($decoded) === 32;
+    }
+}

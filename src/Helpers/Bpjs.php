@@ -496,22 +496,26 @@ class Bpjs
 
     protected function generateKey()
     {
-        $newKey = base64_encode(random_bytes(32));
+        $newKey  = 'base64:' . base64_encode(random_bytes(32));
         $envPath = BPJS_BASE_PATH . '/.env';
 
-        if(!file_exists($envPath)){
-            file_put_contents($envPath,"APP_KEY={$newKey}\n");
-            echo ".env created with new APP_KEY";
-        } else {
-            $env = file_get_contents($envPath);
-            if(strpos($env,'APP_KEY=') === false){
-                $env .= "\nAPP_KEY={$newKey}\n";
-            } else {
-                $env = preg_replace('/APP_KEY=.*/', "APP_KEY={$newKey}", $env);
-            }
-            file_put_contents($envPath, $env);
-            echo "APP_KEY generate successfully";
+        if (!file_exists($envPath)) {
+            file_put_contents($envPath, "APP_KEY={$newKey}\n");
+            echo ".env created with new APP_KEY successfully." . PHP_EOL;
+            return;
         }
+
+        $env = file_get_contents($envPath);
+
+        if (strpos($env, 'APP_KEY=') === false) {
+            $env .= PHP_EOL . "APP_KEY={$newKey}" . PHP_EOL;
+        } else {
+            $env = preg_replace('/^APP_KEY=.*$/m', "APP_KEY={$newKey}", $env);
+        }
+
+        file_put_contents($envPath, $env);
+
+        echo "APP_KEY generated successfully." . PHP_EOL;
     }
 
     protected function cacheRoutes()
