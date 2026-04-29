@@ -4,7 +4,7 @@
  * 
  * http://labs.nticompassinc.com
  */
-namespace Helpers;
+namespace Bpjs\Framework\Helpers;
 class Base32{
 	var $encode, $decode, $type;
 	
