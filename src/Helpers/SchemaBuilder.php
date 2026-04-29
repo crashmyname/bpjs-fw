@@ -38,6 +38,11 @@ class SchemaBuilder
                 'DOUBLE' => 'DOUBLE PRECISION',
                 'ENUM' => 'VARCHAR',
                 'SET' => 'VARCHAR',
+                'LONGTEXT' => 'TEXT',
+                'MEDIUMTEXT' => 'TEXT',
+                'BLOB' => 'BYTEA',
+                'JSON' => 'JSONB',
+                'YEAR' => 'INTEGER',
                 default => $type
             },
 
