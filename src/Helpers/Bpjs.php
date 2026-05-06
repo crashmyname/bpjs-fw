@@ -16,13 +16,15 @@ class Bpjs
         'make:export' => 'createExport',
         'make:migration' => 'createMigration',
         'make:job' => 'createJob',
+        'make:request' => 'createRequest',
         'db:migrate' => 'runMigrations',
         'db:rollback' => 'rollbackMigration',
         'generate:key' => 'generateKey',
         'cache:route' => 'cacheRoutes',
         'cache:clear' => 'clearCache',
-        'serve' => 'Serve',
         'queue:work' => 'queueWork',
+        'serve' => 'Serve',
+        'serve:octane' => 'serveOctane',
         // Tambahkan perintah lainnya di sini
     ];
 
@@ -140,6 +142,69 @@ class Bpjs
         file_put_contents($filePath, $dtoTemplate);
 
         echo "DTO {$namespace}\\{$className} berhasil dibuat!\n";
+    }
+
+    protected function createRequest($name)
+    {
+        if (!$name) {
+            echo "Nama Request harus diberikan!\n";
+            return;
+        }
+
+        $name = trim($name, '/');
+        $parts = explode('/', $name);
+
+        $className = array_pop($parts);
+        $subPath = implode('/', $parts);
+
+        $namespace = 'App\\Requests' . ($subPath ? '\\' . str_replace('/', '\\', $subPath) : '');
+        $directory = 'app/Requests/' . $subPath;
+
+        if (!is_dir($directory)) {
+            mkdir($directory, 0777, true);
+        }
+
+        $filePath = "{$directory}/{$className}.php";
+
+        if (file_exists($filePath)) {
+            echo "Request {$className} sudah ada!\n";
+            return;
+        }
+
+        $template = <<<PHP
+    <?php
+
+    namespace {$namespace};
+
+    use Bpjs\Framework\Core\FormRequest;
+
+    class {$className} extends FormRequest
+    {
+        public function authorize(): bool
+        {
+            return true;
+        }
+
+        public function rules(): array
+        {
+            return [
+                //
+            ];
+        }
+
+        public function messages(): array
+        {
+            return [
+                //
+            ];
+        }
+    }
+
+    PHP;
+
+        file_put_contents($filePath, $template);
+
+        echo "Request {$namespace}\\{$className} berhasil dibuat!\n";
     }
 
     protected function createRepo($name)
@@ -392,7 +457,7 @@ class Bpjs
                             continue;
                         }
                     } else {
-                        echo "❌ Method down() tidak ditemukan di $className, skip.\n";
+                        echo " Method down() tidak ditemukan di $className, skip.\n";
                         continue;
                     }
                 }
@@ -598,6 +663,12 @@ class Bpjs
 
         echo "Starting development server on http://{$host}:{$port}\n";
         exec("php -S {$host}:{$port}");
+    }
+
+    protected function serveOctane()
+    {
+        echo "Starting RoadRunner (Octane Mode)...\n";
+        exec("rr serve");
     }
 
     public function stopWorker()

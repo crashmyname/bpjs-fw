@@ -562,12 +562,22 @@ function config(string $key, $default = null)
     return $config;
 }
 
-function api_prefix() {
-    return app_base_path() . '/api';
+function api_prefix(): string {
+    return '/api';
 }
 
 function app_base_path(): string {
     return rtrim(str_replace('/index.php', '', $_SERVER['SCRIPT_NAME']), '/');
+}
+
+function base_path_from_request(): string
+{
+    $script = $_SERVER['SCRIPT_NAME'] ?? '';
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+
+    $base = rtrim(str_replace('/index.php', '', $script), '/');
+
+    return $base;
 }
 
 function url($params){

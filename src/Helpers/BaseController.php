@@ -462,7 +462,7 @@ class BaseController {
         return htmlspecialchars(strip_tags(trim($data)), ENT_QUOTES, 'UTF-8');
     }
 
-    public function jsonResponse($data, $statusCode)
+    public function json($data, $statusCode)
     {
         header('Content-Type: application/json');
         http_response_code($statusCode);

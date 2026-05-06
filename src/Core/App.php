@@ -13,6 +13,11 @@ class App
         $this->bindings[$abstract] = $concrete($this);
     }
 
+    public function reset()
+    {
+        $this->bindings = [];
+    }
+
     public function make(string $abstract)
     {
         if (!isset($this->bindings[$abstract])) {

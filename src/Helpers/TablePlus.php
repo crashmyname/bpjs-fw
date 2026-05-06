@@ -229,19 +229,54 @@ class TablePlus
                 throw new Exception("Invalid column name");
             }
 
+            $page = (int)($_REQUEST['page'] ?? 1);
+            $limit = (int)($_REQUEST['limit'] ?? 25);
+            $search = trim($_REQUEST['search'] ?? '');
+            $offset = max(0, ($page - 1) * $limit);
+
             $sql = "SELECT DISTINCT {$column} FROM {$this->table}";
-            if (!empty($this->joins)) $sql .= " " . implode(' ', $this->joins);
+            if (!empty($this->joins)) {
+                $sql .= " " . implode(' ', $this->joins);
+            }
+
+            $bindings = [];
+
+            // SEARCH SUPPORT
+            if ($search !== '') {
+                $sql .= " WHERE {$column} LIKE :search";
+                $bindings[':search'] = "%{$search}%";
+            }
+
+            // PAGINATION
+            $sql .= " LIMIT :limit OFFSET :offset";
 
             $stmt = $this->pdo->prepare($sql);
+
+            foreach ($bindings as $k => $v) {
+                $stmt->bindValue($k, $v);
+            }
+
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+
             $stmt->execute();
-            $values = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            $data = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+            // CEK MASIH ADA DATA ATAU TIDAK
+            $hasMore = count($data) === $limit;
 
             header('Content-Type: application/json');
             echo json_encode([
                 'status' => 200,
-                'data' => array_values(array_unique($values))
+                'data' => $data,
+                'pagination' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'has_more' => $hasMore
+                ]
             ]);
             exit;
+
         } catch (Exception $e) {
             http_response_code(500);
             echo json_encode([

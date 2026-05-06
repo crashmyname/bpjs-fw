@@ -19,54 +19,41 @@ class Kernel
 
     protected function mapRoutes(): void
     {
-        if (php_sapi_name() === 'cli') {
-            Route::init(app_base_path());
-            require BPJS_BASE_PATH . '/routes/web.php';
+        $this->dispatcherType = $this->isApiRequest() ? 'api' : 'web';
 
-            Api::init(api_prefix());
-            require BPJS_BASE_PATH . '/routes/api.php';
-
-            return;
-        }
         $cacheFile = BPJS_BASE_PATH . '/storage/cache/routes.php';
 
         if (file_exists($cacheFile)) {
             $routes = require $cacheFile;
 
-            if ($this->isApiRequest()) {
-                $this->dispatcherType = 'api';
-                Api::init(api_prefix());
-                Api::setRoutes($routes['api']);
-                Api::setNames($routes['api_names'] ?? []);
-            } else {
-                $this->dispatcherType = 'web';
-                Route::init(app_base_path());
-                Route::setRoutes($routes['web']);
-                Route::setNames($routes['web_names'] ?? []);
-            }
+            Route::init(app_base_path());
+            Route::setRoutes($routes['web']);
+            Route::setNames($routes['web_names'] ?? []);
+
+            Api::init('/api');
+            Api::setRoutes($routes['api']);
+            Api::setNames($routes['api_names'] ?? []);
 
             return;
         }
 
-        // fallback normal
-        $uri = $_SERVER['REQUEST_URI'] ?? '/';
-        $uri = parse_url($uri, PHP_URL_PATH);
+        Route::init(app_base_path());
+        Api::init('/api');
 
-        if (str_starts_with($uri, '/api')) {
-            $this->dispatcherType = 'api';
-            Api::init(api_prefix());
-            require BPJS_BASE_PATH . '/routes/api.php';
-        } else {
-            $this->dispatcherType = 'web';
-            Route::init(app_base_path());
-            require BPJS_BASE_PATH . '/routes/web.php';
-        }
+        require BPJS_BASE_PATH . '/routes/web.php';
+        require BPJS_BASE_PATH . '/routes/api.php';
     }
 
     private function isApiRequest(): bool
     {
-        $uri = $_SERVER['REQUEST_URI'] ?? '/';
-        $uri = parse_url($uri, PHP_URL_PATH);
+        $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+
+        $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
+
+        if ($base && $base !== '/' && str_starts_with($uri, $base)) {
+            $uri = substr($uri, strlen($base));
+        }
+
         return str_starts_with($uri, '/api');
     }
 
@@ -89,7 +76,35 @@ class Kernel
 
     public function terminate(): void
     {
-        // Bisa untuk logging, session cleanup, dsb.
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+    }
+
+    public function reset(): void
+    {
+        // reset global state
+        $_GET = [];
+        $_POST = [];
+        $_FILES = [];
+        $_COOKIE = [];
+        $_REQUEST = [];
+
+        // reset route current
+        foreach ($_SESSION ?? [] as $k => $v) {
+            unset($_SESSION[$k]);
+        }
+
+        Route::flushCurrent();
+        Route::reset();
+
+        if (function_exists('gc_collect_cycles')) {
+            gc_collect_cycles();
+        }
+        // reset container kalau perlu
+        if (method_exists($this->app, 'reset')) {
+            $this->app->reset();
+        }
     }
 
     public function addMiddleware(string $class): void

@@ -29,6 +29,28 @@ class Request
         return new static();
     }
 
+    public static function flush(): void
+    {
+        $_GET = [];
+        $_POST = [];
+        $_FILES = [];
+        $_COOKIE = [];
+        $_REQUEST = [];
+    }
+
+    public static function fromPsr(\Psr\Http\Message\ServerRequestInterface $psr)
+{
+        $instance = new static();
+
+        $instance->method = $psr->getMethod();
+        $instance->uri = $psr->getUri()->getPath();
+        $instance->headers = $psr->getHeaders();
+        $instance->body = $psr->getParsedBody() ?? [];
+        $instance->query = $psr->getQueryParams();
+
+        return $instance;
+    }
+
     /** -------------------------
      *  GENERAL SANITIZE HELPERS
      *  ------------------------*/

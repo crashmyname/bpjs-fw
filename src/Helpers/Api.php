@@ -143,9 +143,14 @@ class Api
                 $method = strtoupper($_POST['_method']);
             }
 
-            $uri = strtok($_SERVER['REQUEST_URI'], '?');
+            $uri = self::normalizeUri();
 
-            // Potong prefix jika cocok
+            $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
+
+            if ($base && $base !== '/' && str_starts_with($uri, $base)) {
+                $uri = substr($uri, strlen($base));
+            }
+
             if (self::$prefix && str_starts_with($uri, self::$prefix)) {
                 $uri = substr($uri, strlen(self::$prefix));
             }
@@ -205,6 +210,20 @@ class Api
             $content = ob_get_clean();
             return new \Bpjs\Framework\Core\Response($content, 500);
         }
+    }
+
+    public static function normalizeUri(): string
+    {
+        $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+
+        $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+        $base = rtrim(str_replace('\\', '/', dirname($scriptName)), '/');
+
+        if ($base && $base !== '/' && str_starts_with($uri, $base)) {
+            $uri = substr($uri, strlen($base));
+        }
+
+        return '/' . ltrim($uri, '/');
     }
 
     public static function export()

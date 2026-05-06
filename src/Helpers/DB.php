@@ -17,6 +17,9 @@ class DB
     protected $limit;
     protected $offset;
     protected $selectColumns = ['*'];  // Default select columns
+    protected $orderBy = [];
+    protected $groupBy = [];
+    protected $having = [];
 
     // Mendapatkan koneksi database
     public static function getConnection()
@@ -49,6 +52,7 @@ class DB
     public static function table($table)
     {
         $instance = new self();
+        $instance->reset();
         $instance->table = $table;
         return $instance;
     }
@@ -81,12 +85,55 @@ class DB
         return $this;
     }
 
+    public function orderBy($column, $direction = 'ASC')
+    {
+        $this->orderBy[] = "{$this->quote($column)} " . strtoupper($direction);
+        return $this;
+    }
+
+    public function groupBy(...$columns)
+    {
+        $this->groupBy = $columns;
+        return $this;
+    }
+
+    public function having($column, $operator, $value)
+    {
+        $key = ':having_' . count($this->params);
+
+        $this->having[] = "{$this->quote($column)} $operator $key";
+        $this->params[$key] = $value;
+
+        return $this;
+    }
+
+    private function reset()
+    {
+        $this->query = '';
+        $this->params = [];
+        $this->joins = [];
+        $this->conditions = [];
+        $this->limit = null;
+        $this->offset = null;
+        $this->selectColumns = ['*'];
+    }
+
+    private function quote($identifier)
+    {
+        if ($identifier === '*') return $identifier;
+
+        return preg_replace('/[^a-zA-Z0-9_.]/', '', $identifier);
+    }
+
     // Menetapkan kolom yang ingin diambil
     public function select(...$columns)
     {
-        // Jika tidak ada kolom yang ditentukan, gunakan '*' sebagai default
         $this->selectColumns = empty($columns) ? ['*'] : $columns;
-        $this->query = 'SELECT ' . implode(', ', $this->selectColumns) . ' FROM ' . $this->table;
+
+        $cols = implode(', ', array_map(fn($c) => $this->quote($c), $this->selectColumns));
+
+        $this->query = "SELECT $cols FROM {$this->quote($this->table)}";
+
         return $this;
     }
 
@@ -100,18 +147,30 @@ class DB
     // Menambahkan kondisi WHERE
     public function where($column, $operator, $value)
     {
-        $placeholder = ':' . str_replace('.', '_', $column) . count($this->params);
-        $this->conditions[] = "$column $operator $placeholder";
-        $this->params[$placeholder] = $value;
+        $key = ':' . str_replace('.', '_', $column) . count($this->params);
+
+        $this->conditions[] = [
+            'type' => 'AND',
+            'sql'  => "{$this->quote($column)} $operator $key"
+        ];
+
+        $this->params[$key] = $value;
+
         return $this;
     }
 
     // Menambahkan kondisi OR WHERE
     public function orWhere($column, $operator, $value)
     {
-        $placeholder = ':' . str_replace('.', '_', $column) . count($this->params);
-        $this->conditions[] = "OR $column $operator $placeholder";
-        $this->params[$placeholder] = $value;
+        $key = ':' . str_replace('.', '_', $column) . count($this->params);
+
+        $this->conditions[] = [
+            'type' => 'OR',
+            'sql'  => "{$this->quote($column)} $operator $key"
+        ];
+
+        $this->params[$key] = $value;
+
         return $this;
     }
 
@@ -123,34 +182,215 @@ class DB
         return $this;
     }
 
+    private function buildWhere()
+    {
+        if (empty($this->conditions)) return '';
+
+        $sql = ' WHERE ';
+        $first = true;
+
+        foreach ($this->conditions as $cond) {
+            if (!$first) {
+                $sql .= " {$cond['type']} ";
+            }
+
+            $sql .= $cond['sql'];
+            $first = false;
+        }
+
+        return $sql;
+    }
+
+    protected function execute($sql, $params = [], $fetchStyle = PDO::FETCH_OBJ)
+    {
+        try {
+            $start = microtime(true);
+
+            $stmt = self::getConnection()->prepare($sql);
+            $stmt->execute($params);
+
+            $duration = round((microtime(true) - $start) * 1000, 2);
+
+            QueryLogger::add($sql, $params, $duration, 'DB');
+
+            return $stmt->fetchAll($fetchStyle);
+
+        } catch (PDOException $e) {
+            error_log($e->getMessage());
+
+            if (env('APP_DEBUG')) {
+                throw $e;
+            }
+
+            return [];
+        }
+    }
+
     // Mendapatkan hasil query
     public function get($fetchStyle = PDO::FETCH_OBJ)
     {
         $sql = $this->query;
+
         if ($this->joins) {
             $sql .= ' ' . implode(' ', $this->joins);
         }
-        if ($this->conditions) {
-            $sql .= ' WHERE ' . implode(' ', $this->conditions);
-        }
+
+        $sql .= $this->buildWhere();
+
         if ($this->limit) {
-            $sql .= ' LIMIT ' . $this->limit;
-            if ($this->offset) {
-                $sql .= ' OFFSET ' . $this->offset;
+            $sql .= ' LIMIT ' . (int)$this->limit;
+
+            if ($this->offset !== null) {
+                $sql .= ' OFFSET ' . (int)$this->offset;
             }
         }
 
-        return $this->executeQuery($sql, $fetchStyle);
+        if ($this->groupBy) {
+            $sql .= ' GROUP BY ' . implode(', ', array_map(fn($c) => $this->quote($c), $this->groupBy));
+        }
+
+        if ($this->having) {
+            $sql .= ' HAVING ' . implode(' AND ', $this->having);
+        }
+
+        if ($this->orderBy) {
+            $sql .= ' ORDER BY ' . implode(', ', $this->orderBy);
+        }
+
+        $result = $this->execute($sql, $this->params, $fetchStyle);
+
+        $this->reset();
+
+        return $result;
+    }
+
+    public function find($id, $column = 'id')
+    {
+        $this->where($column, '=', $id);
+        return $this->first();
+    }
+
+    public function count($column = '*')
+    {
+        $sql = "SELECT COUNT($column) as aggregate FROM {$this->quote($this->table)}";
+        $sql .= $this->buildWhere();
+
+        $stmt = self::getConnection()->prepare($sql);
+        $stmt->execute($this->params);
+
+        $result = $stmt->fetch(PDO::FETCH_OBJ);
+
+        $this->reset();
+
+        return (int) $result->aggregate;
+    }
+
+    public function exists()
+    {
+        return $this->count() > 0;
+    }
+
+    public function value($column)
+    {
+        $result = $this->select($column)->first();
+
+        if (!$result) return null;
+
+        return $result->{$column};
+    }
+
+    public function pluck($column)
+    {
+        $results = $this->select($column)->get();
+
+        return array_map(fn($row) => $row->{$column}, $results);
+    }
+
+    public function chunk($size, callable $callback)
+    {
+        $page = 1;
+
+        do {
+            $data = $this->limit($size, ($page - 1) * $size)->get();
+
+            if (empty($data)) break;
+
+            $callback($data);
+
+            $page++;
+
+        } while (true);
+    }
+
+    public function upsert($data, $uniqueBy)
+    {
+        $columns = array_keys($data);
+
+        $placeholders = ':' . implode(', :', $columns);
+
+        $updates = implode(', ', array_map(fn($c) => "$c = VALUES($c)", $columns));
+
+        $sql = "INSERT INTO {$this->table} (" . implode(',', $columns) . ")
+                VALUES ($placeholders)
+                ON DUPLICATE KEY UPDATE $updates";
+
+        return $this->execute($sql, $data);
+    }
+
+    public function toSql()
+    {
+        $sql = $this->query;
+        $sql .= $this->buildWhere();
+
+        return $sql;
+    }
+
+    public function paginate($page = 1, $perPage = 10)
+    {
+        $offset = ($page - 1) * $perPage;
+
+        $data = $this->limit($perPage, $offset)->get();
+
+        return [
+            'data' => $data,
+            'page' => $page,
+            'per_page' => $perPage
+        ];
+    }
+
+    public function datatables($request)
+    {
+        $page = ($request['start'] ?? 0) / ($request['length'] ?? 10) + 1;
+        $length = $request['length'] ?? 10;
+
+        $data = $this->paginate($page, $length);
+
+        return [
+            "draw" => intval($request['draw'] ?? 1),
+            "recordsTotal" => count($data['data']),
+            "recordsFiltered" => count($data['data']),
+            "data" => $data['data']
+        ];
     }
 
     // Mendapatkan satu baris hasil query
     public function first($fetchStyle = PDO::FETCH_OBJ)
     {
         $start = microtime(true);
-        $stmt = self::getConnection()->prepare($this->query . ' LIMIT 1');
+        $sql = $this->query;
+
+        if ($this->joins) {
+            $sql .= ' ' . implode(' ', $this->joins);
+        }
+
+        $sql .= $this->buildWhere();
+        $sql .= ' LIMIT 1';
+
+        $stmt = self::getConnection()->prepare($sql);
         $stmt->execute($this->params);
         $duration = round((microtime(true) - $start) * 1000, 2);
 
+        $this->reset();
         QueryLogger::add($this->query, $this->params, $duration, 'DB::table');
         return $stmt->fetch($fetchStyle);
     }
@@ -256,7 +496,7 @@ class DB
     }
 
     // Menghitung hasil query
-    public static function count($sql, $params = [])
+    public static function rowCount($sql, $params = [])
     {
         return self::query($sql, $params)->rowCount();
     }

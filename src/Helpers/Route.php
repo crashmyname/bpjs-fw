@@ -3,7 +3,7 @@ namespace Bpjs\Framework\Helpers;
 
 use Bpjs\Framework\Core\Request;
 use Exception;
-use Helpers\View;
+use Bpjs\Framework\Helpers\View;
 use Middlewares\SessionMiddleware;
 
 class Route
@@ -77,6 +77,17 @@ class Route
         return new self();
     }
 
+    public static function flushCurrent()
+    {
+        self::$currentRoute = [];
+    }
+
+    public static function reset()
+    {
+        self::$currentRoute = [];
+        self::$reflectionCache = [];
+    }
+
     public static function export()
     {
         return self::$routes;
@@ -108,7 +119,7 @@ class Route
     {
         if (self::$lastRouteMethod && self::$lastRouteUri) {
             self::$names[$name] = self::$lastRouteUri;
-            error_log("✅ Route name '{$name}' mapped to URI '" . self::$lastRouteUri . "'");
+            error_log("Route name '{$name}' mapped to URI '" . self::$lastRouteUri . "'");
             return new self();
         }
 
@@ -192,6 +203,10 @@ class Route
     {
         try {
             SessionMiddleware::start();
+            if (!SessionMiddleware::validateDeviceFingerprint()) {
+                SessionMiddleware::destroy();
+                SessionMiddleware::start();
+            }
 
             $method = $_SERVER['REQUEST_METHOD'];
             if ($method === 'POST' && isset($_POST['_method'])) {
@@ -277,6 +292,10 @@ class Route
 
                             if ($className === \Bpjs\Framework\Core\Request::class) {
                                 $methodParams[] = $request;
+
+                            } elseif (is_subclass_of($className, \Bpjs\Framework\Core\FormRequest::class)) {
+                                $methodParams[] = new $className($request);
+
                             } else {
                                 $methodParams[] = $container->make($className);
                             }
