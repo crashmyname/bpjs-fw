@@ -78,7 +78,7 @@ function sanitize($data)
 function json($data, $statusCode = 200)
 {
     $basecontroller = new BaseController();
-    return $basecontroller->jsonResponse($data, $statusCode);
+    return $basecontroller->json($data, $statusCode);
 }
 
 function uploadFile($file, $destination)
