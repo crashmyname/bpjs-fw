@@ -203,9 +203,10 @@ class Route
     {
         try {
             SessionMiddleware::start();
-            if (!SessionMiddleware::validateDeviceFingerprint()) {
-                SessionMiddleware::destroy();
-                SessionMiddleware::start();
+            $validDevice = SessionMiddleware::validateDeviceFingerprint();
+
+            if (!$validDevice && config('auth.device_fingerprint.strict')) {
+                Session::remove('user');
             }
 
             $method = $_SERVER['REQUEST_METHOD'];
