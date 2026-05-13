@@ -742,7 +742,7 @@ class Bpjs
                 logger("[QUEUE] Running {$class}@{$method}");
 
 
-                call_user_func([$instance, $method], $data);
+                $instance->$method($data);
 
                 \Bpjs\Framework\Helpers\Queue::done($job->id);
 

@@ -3,113 +3,139 @@
 namespace Bpjs\Framework\Helpers;
 
 use PDO;
-use PDOException;
 use Throwable;
+use Exception;
 
 class Queue
 {
-    protected static ?PDO $pdo = null;
-    protected static int $lastActivity = 0;
-    protected static int $maxIdleTime = 60; // detik
+    protected static array $connections = [];
+    protected static array $lastActivity = [];
+    protected static string $connection = 'default';
+    protected static int $maxIdleTime = 60;
+    protected static int $maxAttempts = 3;
 
-    /**
-     * Ambil koneksi database
-     */
-    protected static function db(): PDO
+    /* =========================
+     * DB CONNECTION
+     * ========================= */
+    protected static function db(?string $connection = null): PDO
     {
-        if (self::$pdo === null) {
-            self::connect();
+        $connection ??= self::$connection;
+
+        if (!isset(self::$connections[$connection])) {
+            self::connect($connection);
         }
 
-        // reconnect jika idle terlalu lama
-        if ((time() - self::$lastActivity) > self::$maxIdleTime) {
-            self::reconnect();
+        if (
+            isset(self::$lastActivity[$connection]) &&
+            (time() - self::$lastActivity[$connection]) > self::$maxIdleTime
+        ) {
+            self::reconnect($connection);
         }
 
-        // ping koneksi
         try {
-            self::$pdo->query("SELECT 1");
-        } catch (Throwable $e) {
-            self::reconnect();
+            self::$connections[$connection]->query('SELECT 1');
+        } catch (Throwable) {
+            self::reconnect($connection);
         }
 
-        self::$lastActivity = time();
+        self::$lastActivity[$connection] = time();
 
-        return self::$pdo;
+        return self::$connections[$connection];
     }
 
-    /**
-     * Connect database
-     */
-    protected static function connect(): void
+    /* =========================
+     * CONNECT (ENV VERSION)
+     * ========================= */
+    protected static function connect(string $connection = 'default'): void
     {
+        self::$connection = $connection;
+
+        $driver   = env('DB_CONNECTION', 'mysql');
         $host     = env('DB_HOST', '127.0.0.1');
         $port     = env('DB_PORT', '3306');
-        $database = env('DB_DATABASE', '');
+        $dbname   = env('DB_DATABASE', '');
+        $charset  = env('DB_CHARSET', 'utf8mb4');
         $username = env('DB_USERNAME', 'root');
         $password = env('DB_PASSWORD', '');
-        $charset  = env('DB_CHARSET', 'utf8mb4');
-        $socket   = env('DB_SOCKET', null);
 
-        if ($socket) {
-            $dsn = "mysql:unix_socket={$socket};dbname={$database};charset={$charset}";
-        } else {
-            $dsn = "mysql:host={$host};port={$port};dbname={$database};charset={$charset}";
-        }
-
-        self::$pdo = new PDO($dsn, $username, $password, [
+        $options = [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_OBJ,
             PDO::ATTR_EMULATE_PREPARES   => false,
             PDO::ATTR_PERSISTENT         => false,
-            PDO::ATTR_TIMEOUT            => 5,
-        ]);
+        ];
 
-        self::$lastActivity = time();
+        $dsn = match ($driver) {
+            'mysql'  => "mysql:host={$host};port={$port};dbname={$dbname};charset={$charset}",
+            'pgsql'  => "pgsql:host={$host};port={$port};dbname={$dbname}",
+            'sqlite' => "sqlite:{$dbname}",
+            'sqlsrv' => "sqlsrv:Server={$host},{$port};Database={$dbname}",
+            default  => throw new Exception("Driver [$driver] not supported.")
+        };
+
+        self::$connections[$connection] = new PDO(
+            $dsn,
+            $username,
+            $password,
+            $options
+        );
+
+        self::$lastActivity[$connection] = time();
     }
 
-    /**
-     * Reconnect database
-     */
-    public static function reconnect(): void
+    public static function reconnect(?string $connection = null): void
     {
-        self::$pdo = null;
-        self::connect();
+        $connection ??= self::$connection;
+
+        unset(self::$connections[$connection]);
+        self::$lastActivity[$connection] = 0;
+
+        self::connect($connection);
     }
 
-    /**
-     * Jalankan query biasa dengan auto retry
-     */
-    protected static function run(callable $callback)
+    /* =========================
+     * CORE HELPERS
+     * ========================= */
+    protected static function isLostConnection(Throwable $e): bool
+    {
+        $msg = strtolower($e->getMessage());
+
+        return str_contains($msg, 'server has gone away')
+            || str_contains($msg, 'lost connection')
+            || str_contains($msg, 'broken pipe')
+            || str_contains($msg, 'connection was killed');
+    }
+
+    protected static function run(callable $cb, ?string $connection = null)
     {
         try {
-            return $callback(self::db());
+            return $cb(self::db($connection));
         } catch (Throwable $e) {
+
             if (self::isLostConnection($e)) {
-                self::reconnect();
-                return $callback(self::db());
+                self::reconnect($connection);
+                return $cb(self::db($connection));
             }
 
             throw $e;
         }
     }
 
-    /**
-     * Jalankan transaction tanpa auto retry
-     */
-    protected static function transaction(callable $callback)
+    protected static function transaction(callable $cb, ?string $connection = null)
     {
-        $db = self::db();
+        $db = self::db($connection);
 
         try {
             $db->beginTransaction();
 
-            $result = $callback($db);
+            $result = $cb($db);
 
             $db->commit();
 
             return $result;
+
         } catch (Throwable $e) {
+
             if ($db->inTransaction()) {
                 $db->rollBack();
             }
@@ -118,130 +144,149 @@ class Queue
         }
     }
 
-    /**
-     * Cek lost connection
-     */
-    protected static function isLostConnection(Throwable $e): bool
+    /* =========================
+     * TIME
+     * ========================= */
+    protected static function now(): string
     {
-        $message = strtolower($e->getMessage());
+        $driver = env('DB_CONNECTION', 'mysql');
 
-        return str_contains($message, 'server has gone away') ||
-               str_contains($message, 'lost connection') ||
-               str_contains($message, 'error while sending') ||
-               str_contains($message, 'broken pipe') ||
-               str_contains($message, 'connection was killed');
+        return match ($driver) {
+            'sqlite' => "datetime('now')",
+            default  => "NOW()"
+        };
     }
 
-    /**
-     * Push job
-     */
+    /* =========================
+     * PUSH JOB
+     * ========================= */
     public static function push(string $jobClass, array $data = [], string $queue = 'default')
     {
         return self::run(function ($db) use ($jobClass, $data, $queue) {
-            $stmt = $db->prepare("
-                INSERT INTO jobs (queue, payload, status, attempts, created_at, updated_at)
-                VALUES (:queue, :payload, 'pending', 0, NOW(), NOW())
-            ");
 
-            return $stmt->execute([
-                'queue'   => $queue,
+            $now = self::now();
+
+            return $db->prepare("
+                INSERT INTO jobs (
+                    queue,
+                    payload,
+                    status,
+                    attempts,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :queue,
+                    :payload,
+                    'pending',
+                    0,
+                    {$now},
+                    {$now}
+                )
+            ")->execute([
+                'queue' => $queue,
                 'payload' => json_encode([
-                    'job'  => $jobClass,
+                    'job' => $jobClass,
                     'data' => $data
-                ])
+                ], JSON_THROW_ON_ERROR)
             ]);
         });
     }
 
-    /**
-     * Pop job
-     */
+    /* =========================
+     * POP JOB
+     * ========================= */
     public static function pop(string $queue = 'default')
     {
         return self::transaction(function ($db) use ($queue) {
+
+            $now = self::now();
 
             $stmt = $db->prepare("
                 SELECT *
                 FROM jobs
                 WHERE queue = :queue
-                  AND status = 'pending'
+                AND status = 'pending'
+                AND attempts < :max
                 ORDER BY id ASC
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
             ");
 
-            $stmt->execute(['queue' => $queue]);
+            $stmt->execute([
+                'queue' => $queue,
+                'max'   => self::$maxAttempts
+            ]);
 
             $job = $stmt->fetch();
 
-            if ($job) {
-                $update = $db->prepare("
-                    UPDATE jobs
-                    SET status = 'processing',
-                        attempts = attempts + 1,
-                        updated_at = NOW()
-                    WHERE id = :id
-                ");
+            if (!$job) return null;
 
-                $update->execute([
-                    'id' => $job->id
-                ]);
+            $db->prepare("
+                UPDATE jobs
+                SET status = 'processing',
+                    attempts = attempts + 1,
+                    updated_at = {$now}
+                WHERE id = :id
+            ")->execute(['id' => $job->id]);
 
-                $job->attempts++;
-            }
+            $job->attempts++;
 
             return $job;
         });
     }
 
-    /**
-     * Done
-     */
-    public static function done(int $id)
+    /* =========================
+     * DONE / FAIL
+     * ========================= */
+    public static function done(int $id): bool
     {
         return self::run(function ($db) use ($id) {
-            $stmt = $db->prepare("
+            return $db->prepare("
                 UPDATE jobs
                 SET status = 'done',
                     updated_at = NOW()
                 WHERE id = :id
-            ");
-
-            return $stmt->execute(['id' => $id]);
+            ")->execute(['id' => $id]);
         });
     }
 
-    /**
-     * Fail
-     */
-    public static function fail(int $id)
+    public static function fail(int $id, ?string $msg = null): bool
     {
-        return self::run(function ($db) use ($id) {
-            $stmt = $db->prepare("
+        return self::run(function ($db) use ($msg,$id) {
+            return $db->prepare("
                 UPDATE jobs
                 SET status = 'failed',
+                    error_message = :msg,
                     updated_at = NOW()
                 WHERE id = :id
-            ");
-
-            return $stmt->execute(['id' => $id]);
+            ")->execute([
+                'id' => $id,
+                'msg' => $msg
+            ]);
         });
     }
 
-    /**
-     * Release
-     */
-    public static function release(int $id)
+    /* =========================
+     * 🔥 RESTORED: RELEASE JOB
+     * ========================= */
+    public static function release(int $id, int $delay = 10): bool
     {
-        return self::run(function ($db) use ($id) {
-            $stmt = $db->prepare("
+        return self::run(function ($db) use ($id, $delay) {
+
+            $availableAt = date('Y-m-d H:i:s', time() + $delay);
+
+            return $db->prepare("
                 UPDATE jobs
                 SET status = 'pending',
+                    reserved_at = NULL,
+                    available_at = :available_at,
                     updated_at = NOW()
                 WHERE id = :id
-            ");
-
-            return $stmt->execute(['id' => $id]);
+            ")->execute([
+                'id' => $id,
+                'available_at' => $availableAt
+            ]);
         });
     }
 }
