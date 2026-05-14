@@ -323,6 +323,37 @@ function view($view, $data = [], $layout = null)
     return $basecontroller->view($view, $data, $layout);
 }
 
+if (!function_exists('partial')) {
+
+    /**
+     * Include partial view
+     *
+     * @param string $view
+     * @param array $data
+     * @return void
+     */
+    function partial(string $view, array $data = []): void
+    {
+        extract($data);
+
+        $view = str_replace('.', '/', $view);
+
+        $path = BPJS_BASE_PATH .
+            '/resources/views/' .
+            $view .
+            '.php';
+
+        if (!file_exists($path)) {
+
+            throw new Exception(
+                "Partial view not found: {$path}"
+            );
+        }
+
+        include $path;
+    }
+}
+
 function back()
 {
     $basecontroller = new BaseController();

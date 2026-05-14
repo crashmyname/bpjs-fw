@@ -14,13 +14,19 @@ namespace Bpjs\Framework\Helpers\Http;
  */
 class HttpResponse
 {
-    private array|null $decoded = null;
+    private int    $status;
+    private string $body;
+    private array  $headers;
 
     public function __construct(
-        private readonly int    $status,
-        private readonly string $body,
-        private readonly array  $headers = [],
-    ) {}
+        int    $status,
+        string $body,
+        array  $headers = [],
+    ) {
+        $this->status = $status;
+        $this->body = $body;
+        $this->headers = $headers;
+    }
 
     // ─── Status Checks ────────────────────────────────────────────────────────
 
