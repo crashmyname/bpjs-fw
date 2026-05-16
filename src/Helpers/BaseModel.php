@@ -125,6 +125,7 @@ class BaseModel
     protected array   $orWhereConditions = [];
     protected array   $with              = [];
     protected array   $withCount         = [];
+    protected array $appends = [];
 
     // ---- Global / named scopes ----------------------------------------------
 
@@ -2164,6 +2165,13 @@ class BaseModel
             $accessor = 'get' . $this->studly($key) . 'Attribute';
             if (method_exists($this, $accessor)) {
                 $data[$key] = $this->$accessor($data[$key]);
+            }
+        }
+
+        foreach ($this->appends as $appendKey) {
+            $accessor = 'get' . $this->studly($appendKey) . 'Attribute';
+            if (method_exists($this, $accessor)) {
+                $data[$appendKey] = $this->$accessor(null);
             }
         }
 
