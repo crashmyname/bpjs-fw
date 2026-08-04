@@ -119,13 +119,6 @@ class Html extends BaseWriter
     protected bool $isPdf = false;
 
     /**
-     * Is the current writer creating mPDF?
-     *
-     * @deprecated 2.0.1 use instanceof Mpdf instead
-     */
-    protected bool $isMPdf = false;
-
-    /**
      * Generate the Navigation block.
      */
     private bool $generateSheetNavigationBlock = true;
@@ -1777,7 +1770,7 @@ class Html extends BaseWriter
         }
 
         // convert to PCDATA
-        $result = htmlspecialchars($value, Settings::htmlEntityFlags());
+        $result = htmlspecialchars($value, ENT_NOQUOTES);
 
         // color span tag
         if ($color !== null) {

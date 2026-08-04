@@ -1248,7 +1248,7 @@ class Xlsx extends BaseReader
                                                 // Set comment properties
                                                 $comment = $docSheet->getComment([$column + 1, $row + 1]);
                                                 $comment->getFillColor()->setRGB($fillColor);
-                                                if (isset($drowingImages[$fillImageRelId])) {
+                                                if (isset($fillImageRelId, $drowingImages[$fillImageRelId])) {
                                                     $objDrawing = new \PhpOffice\PhpSpreadsheet\Worksheet\Drawing();
                                                     $objDrawing->setName($fillImageTitle);
                                                     $imagePath = str_replace(['../', '/xl/'], 'xl/', $drowingImages[$fillImageRelId]);
@@ -1483,7 +1483,7 @@ class Xlsx extends BaseReader
                                                         );
                                                         if (isset($images[$linkImageKey])) {
                                                             $url = str_replace('xl/drawings/', '', $images[$linkImageKey]);
-                                                            $objDrawing->setPath($url, false, allowExternal: $this->allowExternalImages);
+                                                            $objDrawing->setPath($url, false, allowExternal: $this->allowExternalImages, isWhitelisted: $this->isWhitelisted);
                                                         }
                                                         if ($objDrawing->getPath() === '') {
                                                             continue;
@@ -1581,7 +1581,7 @@ class Xlsx extends BaseReader
                                                         );
                                                         if (isset($images[$linkImageKey])) {
                                                             $url = str_replace('xl/drawings/', '', $images[$linkImageKey]);
-                                                            $objDrawing->setPath($url, false, allowExternal: $this->allowExternalImages);
+                                                            $objDrawing->setPath($url, false, allowExternal: $this->allowExternalImages, isWhitelisted: $this->isWhitelisted);
                                                         }
                                                         if ($objDrawing->getPath() === '') {
                                                             continue;
