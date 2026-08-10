@@ -10,15 +10,15 @@ use Bpjs\Framework\Helpers\View;
 use ReflectionClass;
 use ReflectionMethod;
 use Throwable;
+use Closure;
 
 /**
- * Api Router
+ * Api Router - v2.1.0
  *
  * Dedicated API router for BPJS Framework.
  * Supports JSON-first responses, versioning, rate limiting,
- * API token auth helpers, and structured error envelopes.
- *
- * @version 2.0.0
+ * API token auth helpers, structured error envelopes,
+ * parameter validation, and response macros.
  */
 class Api
 {
@@ -26,54 +26,27 @@ class Api
     // State
     // -------------------------------------------------------------------------
 
-    /** @var array<string, array<string, array>> Registered routes per HTTP method */
     private static array $routes = [];
-
-    /** @var array<string, string> Named route map */
     private static array $names = [];
-
-    /** @var string Active URL prefix (supports nesting) */
     private static string $prefix = '';
-
-    /** @var array Middlewares inherited from the active group */
     private static array $groupMiddlewares = [];
-
-    /** @var string|null HTTP method of the last registered route */
     private static ?string $lastRouteMethod = null;
-
-    /** @var string|null URI of the last registered route */
     private static ?string $lastRouteUri = null;
-
-    /** @var array<string, ReflectionMethod> Reflection cache */
     private static array $reflectionCache = [];
-
-    /** @var callable|null Custom 404 handler */
     private static $notFoundHandler = null;
-
-    /** @var callable|null Custom 500 handler */
     private static $errorHandler = null;
-
-    /** @var string API version prefix applied globally (e.g. 'v1') */
     private static string $version = '';
-
 
     // =========================================================================
     // Initialisation
     // =========================================================================
 
-    /**
-     * Bootstrap the API router.
-     *
-     * @param string $prefix   Global URL prefix (e.g. '/api').
-     * @param string $version  Optional API version segment (e.g. 'v1').
-     */
     public static function init(string $prefix = '', string $version = ''): void
     {
         self::$routes  = array_fill_keys(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], []);
         self::$prefix  = rtrim($prefix, '/');
         self::$version = trim($version, '/');
     }
-
 
     // =========================================================================
     // Route Registration
@@ -109,11 +82,6 @@ class Api
         return self::addRoute('OPTIONS', $uri, $handler, $middlewares);
     }
 
-    /**
-     * Register a route for multiple HTTP methods at once.
-     *
-     * @param string[] $methods
-     */
     public static function match(array $methods, string $uri, $handler, array $middlewares = []): static
     {
         foreach ($methods as $method) {
@@ -122,34 +90,15 @@ class Api
         return new static();
     }
 
-    /**
-     * Register a route for ALL HTTP methods.
-     */
     public static function any(string $uri, $handler, array $middlewares = []): static
     {
         return self::match(array_keys(self::$routes), $uri, $handler, $middlewares);
     }
 
-    /**
-     * Register a standard CRUD resource — generates 5 conventional routes.
-     *
-     * | Verb   | URI                  | Action  | Name           |
-     * |--------|----------------------|---------|----------------|
-     * | GET    | /{resource}          | index   | {res}.index    |
-     * | POST   | /{resource}          | store   | {res}.store    |
-     * | GET    | /{resource}/{id}     | show    | {res}.show     |
-     * | PUT    | /{resource}/{id}     | update  | {res}.update   |
-     * | DELETE | /{resource}/{id}     | destroy | {res}.destroy  |
-     *
-     * @param string $resource    Resource name, e.g. 'users'.
-     * @param string $controller  Controller class string.
-     * @param array  $only        Limit to specific actions, e.g. ['index', 'show'].
-     * @param array  $except      Exclude specific actions.
-     */
     public static function resource(
         string $resource,
         string $controller,
-        array  $only   = [],
+        array  $only = [],
         array  $except = [],
         array  $middlewares = []
     ): void {
@@ -173,25 +122,16 @@ class Api
         }
     }
 
-    /**
-     * Core internal registration — all public methods delegate here.
-     */
     private static function addRoute(string $method, string $uri, $handler, array $middlewares): static
     {
-        // Build full URI: optional version segment + active prefix + uri
-        $segments = array_filter([
-            self::$version !== '' ? '/' . self::$version : '',
-            self::$prefix  !== '' ? self::$prefix        : '',
-            '/' . ltrim($uri, '/'),
-        ]);
-        $fullUri = implode('', $segments);
-        $fullUri = '/' . ltrim($fullUri, '/');
+        $fullUri = '/' . ltrim($uri, '/');
 
         $middlewares = array_merge(self::$groupMiddlewares, $middlewares);
 
         self::$routes[$method][$fullUri] = [
             'handler'     => $handler,
             'middlewares' => $middlewares,
+            'where'       => null,
         ];
 
         self::$lastRouteMethod = $method;
@@ -200,72 +140,72 @@ class Api
         return new static();
     }
 
+    // =========================================================================
+    // NEW: Parameter Validation
+    // =========================================================================
+
+    /**
+     * Add regex constraints to route parameters.
+     *
+     * Example:
+     *   Api::get('/users/{id}', ...)->where(['id' => '[0-9]+']);
+     *   Api::get('/posts/{slug}', ...)->where(['slug' => '[a-z0-9\-]+']);
+     */
+    public function where(array $conditions): static
+    {
+        $method = self::$lastRouteMethod;
+        $uri    = self::$lastRouteUri;
+
+        if ($method && $uri && isset(self::$routes[$method][$uri])) {
+            self::$routes[$method][$uri]['where'] = $conditions;
+        }
+
+        return $this;
+    }
 
     // =========================================================================
     // Grouping
     // =========================================================================
 
-    /**
-     * Apply shared middlewares to a group of routes.
-     * Supports nesting — middlewares are merged, not replaced.
-     */
-    public static function group(array $middlewares, \Closure $routes): void
+    public static function group(array $middlewares, Closure $routes): void
     {
-        $previous               = self::$groupMiddlewares;
+        $previous = self::$groupMiddlewares;
         self::$groupMiddlewares = array_merge($previous, $middlewares);
         $routes();
         self::$groupMiddlewares = $previous;
     }
 
-    /**
-     * Apply a URL prefix to a group of routes, optionally with middlewares.
-     *
-     * @param string   $prefix
-     * @param \Closure $routes
-     * @param array    $middlewares  Optional middlewares scoped to this prefix group.
-     */
-    public static function prefix(string $prefix, \Closure $routes, array $middlewares = []): void
+    public static function prefix(string $prefix, Closure $routes, array $middlewares = []): void
     {
-        $previousPrefix      = self::$prefix;
+        $previousPrefix = self::$prefix;
         $previousMiddlewares = self::$groupMiddlewares;
 
-        self::$prefix           = rtrim($previousPrefix . '/' . trim($prefix, '/'), '/');
+        self::$prefix = rtrim($previousPrefix . '/' . trim($prefix, '/'), '/');
         self::$groupMiddlewares = array_merge($previousMiddlewares, $middlewares);
 
         $routes();
 
-        self::$prefix           = $previousPrefix;
+        self::$prefix = $previousPrefix;
         self::$groupMiddlewares = $previousMiddlewares;
     }
 
-    /**
-     * Set (or change) the global API version segment.
-     * Can also be used to scope a group of routes to a version.
-     *
-     * @param string   $version  e.g. 'v2'
-     * @param \Closure $routes   When provided, version is scoped to the closure.
-     */
-    public static function version(string $version, ?\Closure $routes = null): void
+    public static function version(string $version, ?Closure $routes = null): void
     {
         if ($routes === null) {
             self::$version = trim($version, '/');
             return;
         }
 
-        $previous      = self::$version;
+        $previous = self::$version;
         self::$version = trim($version, '/');
         $routes();
         self::$version = $previous;
     }
 
-
     // =========================================================================
     // Named Routes
     // =========================================================================
 
-    /**
-     * Assign a name to the last registered route.
-     */
     public static function name(string $name): static
     {
         if (self::$lastRouteMethod && self::$lastRouteUri) {
@@ -277,13 +217,6 @@ class Api
         return new static();
     }
 
-    /**
-     * Generate a URL for a named route.
-     *
-     * @param string               $name
-     * @param array<string, mixed> $params  URI parameter substitutions.
-     * @param array<string, mixed> $query   Optional query string parameters.
-     */
     public static function route(string $name, array $params = [], array $query = []): string
     {
         if (!isset(self::$names[$name])) {
@@ -297,8 +230,9 @@ class Api
             $uri = str_replace('{' . $key . '}', rawurlencode((string) $value), $uri);
         }
 
-        $baseUrl = rtrim(env('APP_URL', ''), '/');
-        $url     = $baseUrl . '/' . trim($uri, '/');
+        // FIX: Gunakan base_url() biar subfolder aman
+        $baseUrl = rtrim(base_url(), '/');
+        $url = $baseUrl . '/' . ltrim($uri, '/');
 
         if (!empty($query)) {
             $url .= '?' . http_build_query($query);
@@ -307,17 +241,10 @@ class Api
         return $url;
     }
 
-
     // =========================================================================
     // Throttling
     // =========================================================================
 
-    /**
-     * Add a rate-limit to the last registered route.
-     *
-     * @param int $maxRequests  Max requests per window.
-     * @param int $decaySeconds Time window in seconds (default 60).
-     */
     public function limit(int $maxRequests, int $decaySeconds = 60): static
     {
         $method = self::$lastRouteMethod;
@@ -335,49 +262,100 @@ class Api
         return $this;
     }
 
-
     // =========================================================================
     // Fallback / Custom Error Handlers
     // =========================================================================
 
-    /**
-     * Register a custom 404 handler.
-     *
-     * @param callable $handler  Receives (Request $request): Response|array
-     */
     public static function fallback(callable $handler): void
     {
         self::$notFoundHandler = $handler;
     }
 
-    /**
-     * Register a custom 500 handler.
-     *
-     * @param callable $handler  Receives (Throwable $e, Request $request): Response|array
-     */
     public static function onError(callable $handler): void
     {
         self::$errorHandler = $handler;
     }
 
+    // =========================================================================
+    // NEW: Response Macros
+    // =========================================================================
+
+    /**
+     * Standard success response.
+     *
+     * @param mixed  $data
+     * @param string $message
+     * @param int    $code
+     */
+    public static function success($data = null, string $message = 'OK', int $code = 200): Response
+    {
+        $body = [
+            'statusCode' => $code,
+            'message'    => $message,
+        ];
+
+        if ($data !== null) {
+            $body['data'] = $data;
+        }
+
+        return self::jsonResponse($body, $code);
+    }
+
+    /**
+     * Standard error response.
+     *
+     * @param string     $message
+     * @param int        $code
+     * @param mixed|null $errors  Additional error details (validation errors, etc.)
+     */
+    public static function error(string $message, int $code = 400, $errors = null): Response
+    {
+        $body = [
+            'statusCode' => $code,
+            'error'      => $message,
+        ];
+
+        if ($errors !== null) {
+            $body['errors'] = $errors;
+        }
+
+        return self::jsonResponse($body, $code);
+    }
+
+    /**
+     * Paginated success response.
+     *
+     * @param array $data
+     * @param int   $total
+     * @param int   $page
+     * @param int   $perPage
+     */
+    public static function paginated(array $data, int $total, int $page = 1, int $perPage = 15): Response
+    {
+        return self::jsonResponse([
+            'statusCode' => 200,
+            'message'    => 'OK',
+            'data'       => $data,
+            'meta'       => [
+                'total'        => $total,
+                'per_page'     => $perPage,
+                'current_page' => $page,
+                'last_page'    => (int) ceil($total / $perPage),
+            ],
+        ], 200);
+    }
 
     // =========================================================================
     // Dispatch
     // =========================================================================
 
-    /**
-     * Resolve the current HTTP request and return a JSON Response.
-     */
     public static function dispatch(): Response
     {
-        // API responses are always JSON
         header('Content-Type: application/json; charset=utf-8');
 
         try {
-            // --- CORS preflight ---
             self::handleCors();
 
-            // --- Resolve method ---
             $method = strtoupper($_SERVER['REQUEST_METHOD']);
             if ($method === 'POST' && !empty($_POST['_method'])) {
                 $overridden = strtoupper($_POST['_method']);
@@ -386,15 +364,22 @@ class Api
                 }
             }
 
-            // Short-circuit for CORS preflight
             if ($method === 'OPTIONS') {
                 return new Response('', 204);
             }
 
-            // --- Resolve URI ---
             $uri = self::normalizeUri();
 
-            // --- Route lookup ---
+            // Strip API prefix + version
+            $fullPrefix = self::$prefix;
+            if (self::$version !== '') {
+                $fullPrefix = '/' . self::$version . $fullPrefix;
+            }
+            if ($fullPrefix !== '' && str_starts_with($uri, $fullPrefix)) {
+                $uri = substr($uri, strlen($fullPrefix));
+            }
+            $uri = '/' . ltrim($uri ?: '/', '/');
+
             $route = self::findRoute($method, $uri);
 
             if (!$route) {
@@ -403,34 +388,31 @@ class Api
 
             $request = new Request();
 
-            // --- Run middlewares ---
+            // Run middlewares
             self::runMiddlewares($route['middlewares'] ?? [], $request);
 
-            // --- API token check (if configured) ---
+            // API token check
             if (config('api.require_token', false)) {
                 $token = $_SERVER['HTTP_X_API_KEY']
                     ?? $_SERVER['HTTP_AUTHORIZATION']
                     ?? null;
 
-                // Strip 'Bearer ' prefix
                 if ($token && str_starts_with($token, 'Bearer ')) {
                     $token = substr($token, 7);
                 }
 
                 if (empty($token) || !self::validateApiToken($token)) {
-                    return self::jsonResponse(['statusCode' => 401, 'error' => 'Unauthorized'], 401);
+                    return self::error('Unauthorized', 401);
                 }
             }
 
-            // --- Call handler ---
+            // Call handler
             $result = self::callHandler($route['handler'], $route['params'] ?? [], $request);
 
-            // Normalize result to Response
             if ($result instanceof Response) {
                 return $result;
             }
 
-            // Auto-wrap plain arrays/scalars in a JSON response
             if (is_array($result) || is_object($result)) {
                 return self::jsonResponse($result, 200);
             }
@@ -442,6 +424,48 @@ class Api
         }
     }
 
+    // =========================================================================
+    // NEW: API Documentation Generator
+    // =========================================================================
+
+    /**
+     * Generate API documentation array.
+     * Useful for auto-generating docs or a /api/docs endpoint.
+     *
+     * @return array
+     */
+    public static function docs(): array
+    {
+        $docs = [
+            'version' => self::$version ?: '1',
+            'base'    => base_url() . (self::$version ? '/' . self::$version : '') . self::$prefix,
+            'routes'  => [],
+        ];
+
+        foreach (self::$routes as $method => $routes) {
+            foreach ($routes as $uri => $route) {
+                $routeName = null;
+                foreach (self::$names as $name => $namedUri) {
+                    if ($namedUri === $uri) {
+                        $routeName = $name;
+                        break;
+                    }
+                }
+
+                $docs['routes'][] = [
+                    'method'      => $method,
+                    'uri'         => $uri,
+                    'name'        => $routeName,
+                    'where'       => $route['where'] ?? null,
+                    'middlewares' => array_map(function ($m) {
+                        return is_array($m) ? ($m['class'] ?? 'closure') : (is_string($m) ? $m : 'closure');
+                    }, $route['middlewares'] ?? []),
+                ];
+            }
+        }
+
+        return $docs;
+    }
 
     // =========================================================================
     // State Helpers
@@ -467,9 +491,6 @@ class Api
         self::$names = $names;
     }
 
-    /**
-     * Normalize the incoming request URI (strip base path & query string).
-     */
     public static function normalizeUri(): string
     {
         $uri        = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
@@ -483,41 +504,55 @@ class Api
         return '/' . ltrim($uri ?: '/', '/');
     }
 
-
     // =========================================================================
     // Private Helpers
     // =========================================================================
 
-    /**
-     * Find a matching registered route.
-     *
-     * @return array|null  Route data with `params`, or null.
-     */
     private static function findRoute(string $method, string $uri): ?array
     {
         $routes = self::$routes[$method] ?? [];
 
-        // 1. Exact match (fastest path)
+        // 1. Exact match
         if (isset($routes[$uri])) {
-            $r           = $routes[$uri];
+            $r = $routes[$uri];
             $r['params'] = [];
             return $r;
         }
 
-        // 2. Dynamic pattern match
+        // 2. Pattern match with where validation
         foreach ($routes as $routeUri => $route) {
-            $pattern = preg_replace('/\{[a-zA-Z0-9_]+\?\}/', '([a-zA-Z0-9_\-]*)', $routeUri); // optional
-            $pattern = preg_replace('/\{[a-zA-Z0-9_]+\}/',   '([a-zA-Z0-9_\-]+)', $pattern);  // required
+            // Extract param names
+            preg_match_all('/\{([a-zA-Z0-9_]+)(\?)?\}/', $routeUri, $paramMatches);
+            $paramNames = $paramMatches[1] ?? [];
+
+            // Build regex
+            $pattern = preg_replace('/\{[a-zA-Z0-9_]+\?\}/', '([a-zA-Z0-9_\-]*)', $routeUri);
+            $pattern = preg_replace('/\{[a-zA-Z0-9_]+\}/', '([a-zA-Z0-9_\-]+)', $pattern);
             $pattern = '#^' . $pattern . '$#';
 
             if (preg_match($pattern, $uri, $matches)) {
                 array_shift($matches);
                 $route['params'] = $matches;
+
+                // NEW: Validate where conditions
+                if (!empty($route['where'])) {
+                    foreach ($route['where'] as $i => $condition) {
+                        // Match by index or by param name
+                        $value = $matches[$i] ?? null;
+                        if ($value === null) {
+                            continue;
+                        }
+                        if (!preg_match('#^' . $condition . '$#', $value)) {
+                            continue 2; // Skip this route, where condition failed
+                        }
+                    }
+                }
+
                 return $route;
             }
         }
 
-        // 3. HEAD falls back to GET
+        // 3. HEAD → GET
         if ($method === 'HEAD') {
             return self::findRoute('GET', $uri);
         }
@@ -525,39 +560,31 @@ class Api
         return null;
     }
 
-    /**
-     * Execute all middlewares in the stack.
-     */
     private static function runMiddlewares(array $middlewares, Request $request): void
     {
         foreach ($middlewares as $middleware) {
             if (is_array($middleware) && isset($middleware['class'])) {
-                $class    = $middleware['class'];
-                $params   = $middleware['params'] ?? [];
+                $class = $middleware['class'];
+                $params = $middleware['params'] ?? [];
                 $instance = (new ReflectionClass($class))->newInstanceArgs($params);
                 $instance->handle($request);
-
             } elseif (is_string($middleware)) {
                 $instance = new $middleware();
                 if (method_exists($instance, 'handle')) {
                     $instance->handle($request);
                 }
-
             } elseif (is_callable($middleware)) {
                 $middleware($request);
             }
         }
     }
 
-    /**
-     * Invoke a route handler (controller array or callable).
-     */
     private static function callHandler($handler, array $routeParams, Request $request): mixed
     {
         if (is_array($handler) && count($handler) === 2) {
             [$controllerClass, $method] = $handler;
 
-            $container          = new Container();
+            $container = new Container();
             $controllerInstance = $container->make($controllerClass);
 
             $cacheKey = $controllerClass . '@' . $method;
@@ -565,7 +592,7 @@ class Api
                 self::$reflectionCache[$cacheKey] = new ReflectionMethod($controllerInstance, $method);
             }
 
-            $reflection   = self::$reflectionCache[$cacheKey];
+            $reflection = self::$reflectionCache[$cacheKey];
             $methodParams = [];
 
             foreach ($reflection->getParameters() as $param) {
@@ -596,9 +623,6 @@ class Api
         throw new \RuntimeException("API route handler is neither callable nor a valid [Controller, method] array.");
     }
 
-    /**
-     * Handle CORS headers — reads from config('api.cors').
-     */
     private static function handleCors(): void
     {
         $cors = config('api.cors', []);
@@ -614,9 +638,6 @@ class Api
         header("Access-Control-Max-Age: {$maxAge}");
     }
 
-    /**
-     * Validate an API token against config('api.tokens') list or a custom resolver.
-     */
     private static function validateApiToken(string $token): bool
     {
         $resolver = config('api.token_resolver');
@@ -628,11 +649,6 @@ class Api
         return in_array($token, (array) $tokens, true);
     }
 
-    /**
-     * Build a standardised JSON Response.
-     *
-     * @param array|object $data
-     */
     private static function jsonResponse($data, int $status = 200): Response
     {
         return new Response(
@@ -642,29 +658,18 @@ class Api
         );
     }
 
-    /**
-     * Build a 404 JSON response using the custom fallback or default envelope.
-     */
     private static function handleNotFound(Request $request): Response
     {
         if (self::$notFoundHandler !== null) {
             $result = (self::$notFoundHandler)($request);
-
             if ($result instanceof Response) return $result;
-            if (is_array($result))            return self::jsonResponse($result, 404);
-
+            if (is_array($result)) return self::jsonResponse($result, 404);
             return new Response((string) $result, 404, ['Content-Type' => 'application/json; charset=utf-8']);
         }
 
-        return self::jsonResponse([
-            'statusCode' => 404,
-            'error'      => 'Endpoint tidak ditemukan.',
-        ], 404);
+        return self::error('Endpoint tidak ditemukan.', 404);
     }
 
-    /**
-     * Build a 500 JSON response using the custom error handler or default envelope.
-     */
     private static function handleServerError(Throwable $e): Response
     {
         if (env('APP_DEBUG') === 'true') {
@@ -679,24 +684,16 @@ class Api
 
         if (self::$errorHandler !== null) {
             $result = (self::$errorHandler)($e, new Request());
-
             if ($result instanceof Response) return $result;
-            if (is_array($result))           return self::jsonResponse($result, 500);
-
+            if (is_array($result)) return self::jsonResponse($result, 500);
             return new Response((string) $result, 500, ['Content-Type' => 'application/json; charset=utf-8']);
         }
 
         error_log('[Api] ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
 
-        return self::jsonResponse([
-            'statusCode' => 500,
-            'error'      => 'Internal Server Error',
-        ], 500);
+        return self::error('Internal Server Error', 500);
     }
 
-    /**
-     * Throw or log a routing configuration error.
-     */
     private static function handleError(\Exception $e): never
     {
         if (env('APP_DEBUG') === 'true') {

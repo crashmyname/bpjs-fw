@@ -452,8 +452,9 @@ class BaseController {
 
     public function redirect($url)
     {
-        $uri = base_url() . $url;
-        header("Location: $uri");
+        $base = rtrim($this->base_url(), '/');
+        $path = '/' . ltrim($url, '/');
+        header("Location: " . $base . $path);
         exit();
     }
 
@@ -506,26 +507,23 @@ class BaseController {
         $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
             ? 'https://'
             : 'http://';
-    
+
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    
+
         $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
-    
+
         $dir = str_replace('\\', '/', dirname($scriptName));
         if ($dir === '/' || $dir === '\\') {
             $dir = '';
         }
-    
-        $url = $protocol . $host . $dir;
-    
-        if (!str_ends_with($url, '/')) {
-            $url .= '/';
-        }
-    
+
+        // Hapus trailing slash, nanti ditambah sesuai kebutuhan
+        $url = rtrim($protocol . $host . $dir, '/');
+
         if ($path !== '') {
-            $url .= ltrim($path, '/');
+            $url .= '/' . ltrim($path, '/');
         }
-    
+
         return $url;
     }
 

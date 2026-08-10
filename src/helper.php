@@ -47,10 +47,10 @@ function vendor($path)
     return $baseURL . 'vendor/' . $path;
 }
 
-function base_url()
+function base_url($params = '')
 {
     $basecontroller = new BaseController();
-    return $basecontroller->base_url();
+    return $basecontroller->base_url($params);
 }
 
 function vd($data)
@@ -58,9 +58,10 @@ function vd($data)
     $basecontroller = new BaseController();
     return $basecontroller->prettyPrint($data);
 }
-function route($name, $params = [])
+
+function route($name, $params = [], $query = [])
 {
-    return Route::route($name, $params);
+    return Route::route($name, $params, $query);
 }
 
 function redirect($url)
@@ -611,8 +612,8 @@ function base_path_from_request(): string
     return $base;
 }
 
-function url($params){
-    return base_url().$params;
+function url($params = ''){
+    return base_url($params);
 }
 
 if (!function_exists('cookie_set')) {
