@@ -523,6 +523,18 @@ class Request
         ];
     }
 
+    /**
+     * Get input value (alias for input method)
+     * 
+     * @param string $key
+     * @param mixed $default
+     * @return mixed
+     */
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return $this->input($key, $default);
+    }
+
     /* =========================================================
      * INPUT VALIDATION
      * ========================================================= */
