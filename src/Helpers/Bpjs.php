@@ -1121,12 +1121,22 @@ class Bpjs
 
     protected function queueWork($queue = 'default')
     {
+        $queue = $queue ?? 'default';
         $queues = explode(',', $queue);
+        $queues = array_map('trim', $queues);
+        $queues = array_filter($queues);
+        
+        if (empty($queues)) {
+            $queues = ['default'];
+        }
+        
         $sleep = (int) env('QUEUE_SLEEP', 2);
         $maxTries = (int) env('QUEUE_TRIES', 3);
         $memoryLimit = env('QUEUE_MEMORY', 128) * 1024 * 1024;
         $keepAliveInterval = (int) env('QUEUE_KEEPALIVE', 300);
         $lastKeepAlive = time();
+        $processedCount = 0;
+        $emptyCount = 0;
 
         if (function_exists('pcntl_async_signals')) {
             pcntl_async_signals(true);
@@ -1138,13 +1148,15 @@ class Bpjs
         echo str_repeat('=', 60) . "\n";
         echo " Listening queues: " . implode(', ', $queues) . "\n";
         echo " Max attempts: {$maxTries}\n";
-        echo "  Keep-alive interval: {$keepAliveInterval}s\n\n";
+        echo " Keep-alive interval: {$keepAliveInterval}s\n";
+        echo " Sleep interval: {$sleep}s\n\n";
 
         if (\Bpjs\Framework\Helpers\Queue::engine() === \Bpjs\Framework\Helpers\Queue::ENGINE_DATABASE) {
             try {
                 \Bpjs\Framework\Helpers\Queue::installMigration();
-            } catch (Throwable $e) {
-                echo "  Warning: " . $e->getMessage() . "\n";
+                echo "Queue table ready\n\n";
+            } catch (\Throwable $e) {
+                echo "Warning: " . $e->getMessage() . "\n\n";
             }
         }
 
@@ -1154,7 +1166,7 @@ class Bpjs
                     try {
                         $db = \Bpjs\Framework\Helpers\Database::connection();
                         $db->query('SELECT 1');
-                    } catch (Throwable $e) {
+                    } catch (\Throwable $e) {
                         \Bpjs\Framework\Helpers\Database::disconnect();
                         \Bpjs\Framework\Helpers\Database::connection();
                     }
@@ -1164,14 +1176,13 @@ class Bpjs
                 $job = null;
 
                 foreach ($queues as $q) {
-                    $q = trim($q);
-                    
                     try {
                         $job = \Bpjs\Framework\Helpers\Queue::pop($q);
                         if ($job) {
+                            echo "Found job in queue '{$q}'\n";
                             break;
                         }
-                    } catch (Throwable $e) {
+                    } catch (\Throwable $e) {
                         if (str_contains($e->getMessage(), 'server has gone away') ||
                             str_contains($e->getMessage(), 'lost connection')) {
                             \Bpjs\Framework\Helpers\Database::disconnect();
@@ -1182,12 +1193,21 @@ class Bpjs
                 }
 
                 if (!$job) {
+                    $emptyCount++;
+                    if ($emptyCount % 5 == 0) {
+                        echo "No jobs available (checked {$emptyCount} times)\n";
+                    }
                     sleep($sleep);
                     continue;
                 }
 
+                $emptyCount = 0;
+                $processedCount++;
                 $start = microtime(true);
-                echo " [JOB] Processing ID {$job->id} | Queue: {$job->queue} | Attempt: {$job->attempts}/{$maxTries}\n";
+                
+                echo "\n  [JOB] Processing ID {$job->id}\n";
+                echo "    Queue: {$job->queue}\n";
+                echo "    Attempt: {$job->attempts}/{$maxTries}\n";
 
                 $payload = json_decode($job->payload, true);
                 $class = $payload['job'] ?? null;
@@ -1195,7 +1215,7 @@ class Bpjs
                 $method = $payload['method'] ?? 'handle';
 
                 if (!$class) {
-                    throw new \Exception("Job class empty.");
+                    throw new \Exception("Job class empty in payload");
                 }
 
                 if (!class_exists($class)) {
@@ -1209,37 +1229,43 @@ class Bpjs
                 }
 
                 $instance->$method($data);
+                
                 \Bpjs\Framework\Helpers\Queue::done($job->id);
 
                 $duration = round(microtime(true) - $start, 3);
-                echo " [DONE] Job {$job->id} in {$duration}s\n";
+                echo "[DONE] Job {$job->id} completed in {$duration}s\n";
+                echo "Total processed: {$processedCount}\n";
 
-            } catch (Throwable $e) {
-                if (isset($job) && $job) {
+            } catch (\Throwable $e) {
+                if (isset($job) && is_object($job)) {
                     try {
-                        if ($job->attempts < $maxTries) {
+                        $jobAttempts = (int) $job->attempts;
+                        if ($jobAttempts < $maxTries) {
                             \Bpjs\Framework\Helpers\Queue::release($job->id);
-                            echo " [RETRY] Job {$job->id} attempt {$job->attempts}/{$maxTries}\n";
+                            echo "[RETRY] Job {$job->id} attempt {$jobAttempts}/{$maxTries}\n";
                         } else {
                             \Bpjs\Framework\Helpers\Queue::fail($job->id, $e->getMessage());
-                            echo " [FAILED] Job {$job->id} - {$e->getMessage()}\n";
+                            echo "[FAILED] Job {$job->id} - {$e->getMessage()}\n";
                         }
-                    } catch (Throwable $e2) {
-                        echo " [ERROR] Failed to process job: " . $e2->getMessage() . "\n";
+                    } catch (\Throwable $e2) {
+                        echo "[ERROR] Failed to process job: " . $e2->getMessage() . "\n";
                     }
+                } else {
+                    echo "[ERROR] " . $e->getMessage() . "\n";
                 }
-
-                echo " [ERROR] " . $e->getMessage() . "\n";
+                
                 sleep($sleep);
             }
 
+            // Cek memory limit
             if (memory_get_usage(true) > $memoryLimit) {
-                echo " [STOP] Memory limit exceeded. Restarting worker...\n";
+                echo "[STOP] Memory limit exceeded. Restarting worker...\n";
                 exit(0);
             }
         }
 
-        echo " Worker stopped gracefully.\n";
+        echo "Worker stopped gracefully.\n";
+        echo "Total jobs processed: {$processedCount}\n";
     }
 
     protected function queueRetryStuck()
@@ -1280,19 +1306,19 @@ class Bpjs
                 $size = \Bpjs\Framework\Helpers\Queue::size($queue);
                 $total = array_sum($size);
                 
-                echo " Queue: {$queue}\n";
-                echo "    Pending:    {$size['pending']}\n";
-                echo "    Processing: {$size['processing']}\n";
-                echo "    Done:       {$size['done']}\n";
-                echo "    Failed:     {$size['failed']}\n";
-                echo "    Total:      {$total}\n";
+                echo "Queue: {$queue}\n";
+                echo "Pending:    {$size['pending']}\n";
+                echo "Processing: {$size['processing']}\n";
+                echo "Done:       {$size['done']}\n";
+                echo "Failed:     {$size['failed']}\n";
+                echo "Total:      {$total}\n";
                 
                 if ($total > 100) {
-                    echo "     WARNING: Queue size > 100!\n";
+                    echo "WARNING: Queue size > 100!\n";
                 }
                 echo str_repeat('-', 60) . "\n";
             } catch (\Exception $e) {
-                echo " Error on queue '{$queue}': " . $e->getMessage() . "\n";
+                echo "Error on queue '{$queue}': " . $e->getMessage() . "\n";
             }
         }
         echo "\n";

@@ -503,9 +503,9 @@ class Queue
             $stmt = $db->prepare("
                 SELECT * FROM jobs
                 WHERE queue = :queue
-                  AND status = 'pending'
-                  AND attempts < :max
-                  AND (available_at IS NULL OR available_at <= :now)
+                AND status = 'pending'
+                AND attempts < :max
+                AND (available_at IS NULL OR available_at <= :now)
                 ORDER BY id ASC
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
@@ -517,13 +517,15 @@ class Queue
                 'now' => $nowTs,
             ]);
 
-            $job = $stmt->fetch();
+            // PERBAIKAN: Fetch as object
+            $job = $stmt->fetch(PDO::FETCH_OBJ);
 
             if (!$job) {
                 return null;
             }
 
-            $stmt = $db->prepare("
+            // Update status
+            $updateStmt = $db->prepare("
                 UPDATE jobs
                 SET status = 'processing',
                     attempts = attempts + 1,
@@ -531,9 +533,12 @@ class Queue
                     updated_at = {$now}
                 WHERE id = :id
             ");
-            $stmt->execute(['id' => $job->id]);
+            $updateStmt->execute(['id' => $job->id]);
 
-            $job->attempts++;
+            // PERBAIKAN: Update object properties
+            $job->status = 'processing';
+            $job->attempts = (int)$job->attempts + 1;
+            $job->reserved_at = $nowTs;
 
             return $job;
         });
@@ -659,7 +664,7 @@ class Queue
             $stmt = $db->prepare("
                 SELECT * FROM jobs
                 WHERE queue = :queue
-                  AND status = :status
+                AND status = :status
                 ORDER BY id DESC
                 LIMIT :limit
             ");
@@ -669,7 +674,8 @@ class Queue
             $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
             $stmt->execute();
 
-            return $stmt->fetchAll();
+            // PERBAIKAN: Fetch as objects
+            return $stmt->fetchAll(PDO::FETCH_OBJ);
         });
     }
 
@@ -832,10 +838,19 @@ class Queue
         $done = 0;
         $failed = 0;
         $prefix = self::redisPrefix() . 'job:';
-        $cursor = null;
-
-        do {
-            [$cursor, $keys] = $redis->scan($cursor, ['match' => $prefix . '*', 'count' => 100]);
+        
+        // PERBAIKAN: Gunakan iterator null dan pattern sebagai parameter terpisah
+        $iterator = null;
+        $pattern = $prefix . '*';
+        
+        while (true) {
+            // PERBAIKAN: scan dengan signature yang benar
+            $keys = $redis->scan($iterator, $pattern, 100);
+            
+            if ($keys === false) {
+                break;
+            }
+            
             foreach ($keys as $jobKey) {
                 $jobQueue = $redis->hGet($jobKey, 'queue');
                 $jobStatus = $redis->hGet($jobKey, 'status');
@@ -851,7 +866,12 @@ class Queue
                     $failed++;
                 }
             }
-        } while ($cursor != 0);
+            
+            // Jika iterator sudah 0, selesai
+            if ($iterator == 0) {
+                break;
+            }
+        }
 
         return [
             self::STATUS_PENDING => $pending + $delayed,
@@ -865,10 +885,19 @@ class Queue
     {
         $redis = self::redis();
         $prefix = self::redisPrefix() . 'job:';
-        $cursor = null;
-
-        do {
-            [$cursor, $keys] = $redis->scan($cursor, ['match' => $prefix . '*', 'count' => 100]);
+        
+        // PERBAIKAN: Gunakan iterator null dan pattern sebagai parameter terpisah
+        $iterator = null;
+        $pattern = $prefix . '*';
+        
+        while (true) {
+            // PERBAIKAN: scan dengan signature yang benar
+            $keys = $redis->scan($iterator, $pattern, 100);
+            
+            if ($keys === false) {
+                break;
+            }
+            
             foreach ($keys as $jobKey) {
                 $jobQueue = $redis->hGet($jobKey, 'queue');
                 $jobStatus = $redis->hGet($jobKey, 'status');
@@ -882,7 +911,12 @@ class Queue
                 $redis->zRem(self::redisProcessingKey($queue), $jobId);
                 $redis->lRem(self::redisPendingKey($queue), $jobId, 0);
             }
-        } while ($cursor != 0);
+            
+            // Jika iterator sudah 0, selesai
+            if ($iterator == 0) {
+                break;
+            }
+        }
 
         if ($status === self::STATUS_PENDING) {
             $redis->del(self::redisPendingKey($queue));
@@ -939,11 +973,20 @@ class Queue
     {
         $redis = self::redis();
         $prefix = self::redisPrefix() . 'job:';
-        $cursor = null;
         $result = [];
-
-        do {
-            [$cursor, $keys] = $redis->scan($cursor, ['match' => $prefix . '*', 'count' => 100]);
+        
+        // PERBAIKAN: Gunakan iterator null dan pattern sebagai parameter terpisah
+        $iterator = null;
+        $pattern = $prefix . '*';
+        
+        while (true) {
+            // PERBAIKAN: scan dengan signature yang benar
+            $keys = $redis->scan($iterator, $pattern, 100);
+            
+            if ($keys === false) {
+                break;
+            }
+            
             foreach ($keys as $jobKey) {
                 $jobData = $redis->hGetAll($jobKey);
 
@@ -957,10 +1000,15 @@ class Queue
                 $result[] = self::arrayToObject($jobData);
 
                 if (count($result) >= $limit) {
-                    break 2;
+                    return $result;
                 }
             }
-        } while ($cursor != 0);
+            
+            // Jika iterator sudah 0, selesai
+            if ($iterator == 0) {
+                break;
+            }
+        }
 
         return $result;
     }
