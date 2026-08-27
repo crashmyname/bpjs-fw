@@ -535,6 +535,31 @@ class Request
         return $this->input($key, $default);
     }
 
+    /**
+     * Set data value
+     */
+    public function set(string $key, mixed $value): void
+    {
+        $this->data[$key] = $value;
+    }
+
+    /**
+     * Remove data value
+     */
+    public function unset(string $key): void
+    {
+        unset($this->data[$key]);
+    }
+
+    /**
+     * Merge additional data
+     */
+    public function merge(array $data): self
+    {
+        $this->data = array_merge($this->data, $data);
+        return $this;
+    }
+
     /* =========================================================
      * INPUT VALIDATION
      * ========================================================= */
@@ -733,6 +758,90 @@ class Request
             return "The {$field} field confirmation does not match.";
         }
         return true;
+    }
+
+    private function validateAlpha(string $field, $value, array $params): bool|string
+    {
+        if (!preg_match('/^[a-zA-Z]+$/', $value)) {
+            return "The {$field} field must contain only letters.";
+        }
+        return true;
+    }
+
+    private function validateAlphaNumeric(string $field, $value, array $params): bool|string
+    {
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $value)) {
+            return "The {$field} field must contain only letters and numbers.";
+        }
+        return true;
+    }
+
+    private function validatePhone(string $field, $value, array $params): bool|string
+    {
+        if (!preg_match('/^[0-9+\-\s()]+$/', $value)) {
+            return "The {$field} field must be a valid phone number.";
+        }
+        return true;
+    }
+
+    private function validateJson(string $field, $value, array $params): bool|string
+    {
+        if (!is_string($value) || json_decode($value) === null) {
+            return "The {$field} field must be valid JSON.";
+        }
+        return true;
+    }
+
+    private function validateIp(string $field, $value, array $params): bool|string
+    {
+        if (!filter_var($value, FILTER_VALIDATE_IP)) {
+            return "The {$field} field must be a valid IP address.";
+        }
+        return true;
+    }
+
+    private function validateArray(string $field, $value, array $params): bool|string
+    {
+        if (!is_array($value)) {
+            return "The {$field} field must be an array.";
+        }
+        return true;
+    }
+
+    private function validateExists(string $field, $value, array $params): bool|string
+    {
+        // Example: exists:users,email
+        // You would need to implement database checking here
+        return true;
+    }
+
+    private function validateUnique(string $field, $value, array $params): bool|string
+    {
+        // Example: unique:users,email,except_id
+        // You would need to implement database checking here
+        return true;
+    }
+
+    /**
+     * Download file
+     */
+    public function download(string $path, ?string $filename = null): void
+    {
+        if (!file_exists($path)) {
+            throw new \RuntimeException('File not found');
+        }
+        
+        $filename = $filename ?? basename($path);
+        $mime = mime_content_type($path);
+        $size = filesize($path);
+        
+        header('Content-Type: ' . $mime);
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . $size);
+        header('Cache-Control: private, no-cache, must-revalidate');
+        
+        readfile($path);
+        exit;
     }
 
     /* =========================================================
@@ -1067,6 +1176,66 @@ class Request
     }
 
     /**
+     * Get raw body
+     */
+    public function rawBody(): string
+    {
+        return file_get_contents('php://input');
+    }
+
+    /**
+     * Get JSON body as array
+     */
+    public function jsonBody(): array
+    {
+        $raw = $this->rawBody();
+        $decoded = json_decode($raw, true);
+        
+        return json_last_error() === JSON_ERROR_NONE ? $decoded : [];
+    }
+
+    /**
+     * Check if IP is in range
+     */
+    public function ipInRange(string $ip, string $range): bool
+    {
+        [$subnet, $bits] = explode('/', $range);
+        $ipLong = ip2long($ip);
+        $subnetLong = ip2long($subnet);
+        $mask = -1 << (32 - $bits);
+        $subnetLong &= $mask;
+        
+        return ($ipLong & $mask) === $subnetLong;
+    }
+
+    /**
+     * Check if request is from localhost
+     */
+    public function isLocalhost(): bool
+    {
+        return in_array($this->clientIp, ['127.0.0.1', '::1', 'localhost']);
+    }
+
+    /**
+     * Set cache headers
+     */
+    public function setCacheHeaders(int $seconds = 3600): void
+    {
+        header('Cache-Control: public, max-age=' . $seconds);
+        header('Expires: ' . gmdate('D, d M Y H:i:s', time() + $seconds) . ' GMT');
+    }
+
+    /**
+     * Set no-cache headers
+     */
+    public function setNoCacheHeaders(): void
+    {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Cache-Control: post-check=0, pre-check=0', false);
+        header('Pragma: no-cache');
+    }
+
+    /**
      * Get boolean input
      */
     public function boolean(string $key, bool $default = false): bool
@@ -1394,6 +1563,54 @@ class Request
     {
         $contentType = $_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? '';
         return str_contains($contentType, 'application/json');
+    }
+
+    /**
+     * Get session value
+     */
+    public function session(string $key, mixed $default = null): mixed
+    {
+        return $_SESSION[$key] ?? $default;
+    }
+
+    /**
+     * Set session value
+     */
+    public function setSession(string $key, mixed $value): void
+    {
+        $_SESSION[$key] = $value;
+    }
+
+    /**
+     * Check if session has key
+     */
+    public function hasSession(string $key): bool
+    {
+        return isset($_SESSION[$key]);
+    }
+
+    /**
+     * Remove session key
+     */
+    public function removeSession(string $key): void
+    {
+        unset($_SESSION[$key]);
+    }
+
+    /**
+     * Flash session data
+     */
+    public function flash(string $key, mixed $value = null): mixed
+    {
+        if ($value !== null) {
+            $_SESSION['_flash'][$key] = $value;
+            return null;
+        }
+        
+        $flashValue = $_SESSION['_flash'][$key] ?? null;
+        unset($_SESSION['_flash'][$key]);
+        
+        return $flashValue;
     }
 
     /**

@@ -726,7 +726,7 @@ class Bpjs
     {
         $migrationPath = 'database/migrations';
         if (!is_dir($migrationPath)) {
-            echo " Migration folder not found.\n";
+            echo "Migration folder not found.\n";
             return;
         }
 
@@ -740,17 +740,17 @@ class Bpjs
             return;
         }
 
-        // Use Database helper
         $pdo = Database::connection();
 
         echo "\n Running migrations...\n";
         echo str_repeat('=', 60) . "\n";
 
         $executed = 0;
+        $errors = [];
 
         foreach ($files as $file) {
             if (in_array($file, $migrated)) {
-                echo "  Skip {$file} (already executed)\n";
+                echo "Skip {$file} (already executed)\n";
                 continue;
             }
 
@@ -758,50 +758,71 @@ class Bpjs
             $className = $this->getClassNameFromFile($file);
 
             if (!class_exists($className)) {
-                echo " Class {$className} not found in {$file}\n";
+                echo "Class {$className} not found in {$file}\n";
                 continue;
             }
 
             $migration = new $className();
 
             if (!method_exists($migration, 'up')) {
-                echo "  Method up() not found in {$className}, skipping.\n";
+                echo "Method up() not found in {$className}, skipping.\n";
                 continue;
             }
 
-            echo " Running: {$className}...\n";
+            echo "Running: {$className}...\n";
 
             try {
-                $pdo->beginTransaction();
-                $migration->up();
-                $pdo->commit();
+                $reflection = new \ReflectionMethod($migration, 'up');
+                $parameters = $reflection->getParameters();
+                
+                if (count($parameters) > 0) {
+                    echo "    (Using legacy format with PDO parameter)\n";
+                    $migration->up($pdo);
+                } else {
+                    $migration->up();
+                }
 
                 $this->logMigration($file);
                 $executed++;
-                echo " {$file} executed successfully.\n";
+                echo "{$file} executed successfully.\n";
             } catch (\PDOException $e) {
-                $pdo->rollBack();
-                echo " Error on migration {$file}:\n";
+                $errors[] = $file;
+                echo "Error on migration {$file}:\n";
                 echo "    " . $e->getMessage() . "\n";
                 
-                echo "   Continue with next migration? (y/n): ";
+                echo "    Continue with next migration? (y/n): ";
                 $handle = fopen("php://stdin", "r");
                 $line = trim(fgets($handle));
                 fclose($handle);
                 
                 if (strtolower($line) !== 'y') {
-                    echo " Migration stopped.\n";
+                    echo "Migration stopped.\n";
                     break;
                 }
+            } catch (\ArgumentCountError $e) {
+                $errors[] = $file;
+                echo "    Argument error on migration {$file}:\n";
+                echo "    " . $e->getMessage() . "\n";
+                echo "    Migration file might be using old format.\n";
+                echo "    Please update to new format: public function up(): void\n";
+                break;
             } catch (\Exception $e) {
-                $pdo->rollBack();
-                echo " Error on migration {$file}: " . $e->getMessage() . "\n";
+                $errors[] = $file;
+                echo "Error on migration {$file}: " . $e->getMessage() . "\n";
                 break;
             }
         }
 
         echo str_repeat('=', 60) . "\n";
-        echo " Done! {$executed} migration(s) executed successfully.\n\n";
+        echo "Done! {$executed} migration(s) executed successfully.\n";
+        
+        if (!empty($errors)) {
+            echo "Failed migrations:\n";
+            foreach ($errors as $error) {
+                echo "    - {$error}\n";
+            }
+        }
+        echo "\n";
     }
 
     protected function getClassNameFromFile($file)
@@ -823,6 +844,9 @@ class Bpjs
     protected function removeLastMigration()
     {
         $data = $this->getMigrationLog();
+        if (empty($data)) {
+            return;
+        }
         array_pop($data);
         file_put_contents($this->migrationLogFile, json_encode(array_values($data), JSON_PRETTY_PRINT));
     }
@@ -856,7 +880,7 @@ class Bpjs
         $path = "database/migrations/{$lastFile}";
 
         if (!file_exists($path)) {
-            echo " Migration file {$lastFile} not found.\n";
+            echo "Migration file {$lastFile} not found.\n";
             return;
         }
 
@@ -866,32 +890,41 @@ class Bpjs
         $pdo = Database::connection();
 
         if (!class_exists($className)) {
-            echo " Class {$className} not found in {$lastFile}.\n";
+            echo "Class {$className} not found in {$lastFile}.\n";
             return;
         }
 
         $migration = new $className();
 
         if (!method_exists($migration, 'down')) {
-            echo "  Method down() not found in {$className}.\n";
+            echo "Method down() not found in {$className}.\n";
             return;
         }
 
-        echo " Rolling back: {$className}...\n";
+        echo "Rolling back: {$className}...\n";
 
         try {
-            $pdo->beginTransaction();
-            $migration->down();
-            $pdo->commit();
+            $reflection = new \ReflectionMethod($migration, 'down');
+            $parameters = $reflection->getParameters();
+            
+            if (count($parameters) > 0) {
+                echo "    (Using legacy format with PDO parameter)\n";
+                $migration->down($pdo);
+            } else {
+                $migration->down();
+            }
 
             $this->removeLastMigration();
-            echo " Rollback {$lastFile} completed successfully.\n";
+            echo "Rollback {$lastFile} completed successfully.\n";
+        } catch (\ArgumentCountError $e) {
+            echo "    Argument error on rollback:\n";
+            echo "    " . $e->getMessage() . "\n";
+            echo "    Migration file might be using old format.\n";
+            echo "    Please update to new format: public function down(): void\n";
         } catch (\PDOException $e) {
-            $pdo->rollBack();
-            echo " Rollback failed: " . $e->getMessage() . "\n";
+            echo "Rollback failed: " . $e->getMessage() . "\n";
         } catch (\Exception $e) {
-            $pdo->rollBack();
-            echo " Rollback failed: " . $e->getMessage() . "\n";
+            echo "Rollback failed: " . $e->getMessage() . "\n";
         }
     }
 
@@ -901,9 +934,12 @@ class Bpjs
         echo str_repeat('=', 60) . "\n";
 
         $migrated = $this->getMigrationLog();
-        while (!empty($migrated)) {
+        $maxRollbacks = 100;
+        
+        while (!empty($migrated) && $maxRollbacks > 0) {
             $this->rollbackMigration();
             $migrated = $this->getMigrationLog();
+            $maxRollbacks--;
         }
 
         echo "\n Running migrations again...\n";
