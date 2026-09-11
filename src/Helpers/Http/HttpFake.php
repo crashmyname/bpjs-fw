@@ -1,21 +1,6 @@
 <?php
 namespace Bpjs\Framework\Helpers\Http;
 
-/**
- * Http::fake() — Mock HTTP responses untuk unit testing.
- *
- * Usage (mock semua request):
- *   Http::fake(['status' => 200, 'body' => ['ok' => true]]);
- *
- * Usage (mock per URL pattern):
- *   Http::fake([
- *       'https://api.example.com/users*' => ['status' => 200, 'body' => ['id' => 1]],
- *       'https://api.example.com/error*' => ['status' => 500, 'body' => ['msg' => 'oops']],
- *       '*'                              => ['status' => 200, 'body' => []],  // fallback
- *   ]);
- *
- * Setelah selesai test, panggil Http::resetFake() agar tidak mempengaruhi test lain.
- */
 class HttpFake
 {
     private bool  $active   = false;
@@ -28,12 +13,10 @@ class HttpFake
         $this->recorded = [];
 
         if ($stubOrMap === null) {
-            // Default: semua request return 200 empty
             $this->stubs = [['pattern' => '*', 'status' => 200, 'body' => []]];
             return;
         }
 
-        // Single stub (tidak ada 'pattern' key)
         if (isset($stubOrMap['status']) || isset($stubOrMap['body'])) {
             $this->stubs = [[
                 'pattern' => '*',
@@ -43,7 +26,6 @@ class HttpFake
             return;
         }
 
-        // Map per URL pattern
         $this->stubs = [];
         foreach ($stubOrMap as $pattern => $stub) {
             $this->stubs[] = [
@@ -61,14 +43,15 @@ class HttpFake
         $this->recorded = [];
     }
 
-    public function isActive(): bool
-    {
-        return $this->active;
-    }
+    public function isActive(): bool { return $this->active; }
 
     public function resolve(string $method, string $url): HttpResponse
     {
-        $this->recorded[] = compact('method', 'url');
+        $this->recorded[] = [
+            'method' => $method,
+            'url'    => $url,
+            'time'   => microtime(true),
+        ];
 
         foreach ($this->stubs as $stub) {
             if ($this->matches($url, $stub['pattern'])) {
@@ -79,48 +62,35 @@ class HttpFake
             }
         }
 
-        // Tidak ada yang cocok → 200 kosong
         return new HttpResponse(200, '{}');
     }
 
-    /**
-     * Assert bahwa URL tertentu pernah di-request.
-     */
+    // ─── Assertions ──────────────────────────────────────────────────────
     public function assertSent(string $urlPattern): void
     {
-        $found = array_filter(
-            $this->recorded,
-            fn($r) => $this->matches($r['url'], $urlPattern)
-        );
-
-        if (empty($found)) {
-            throw new \RuntimeException("Assert failed: No request sent matching '{$urlPattern}'.");
+        if (empty($this->filter($urlPattern))) {
+            throw new \RuntimeException(
+                "Assert failed: tidak ada request ke '{$urlPattern}'."
+            );
         }
     }
 
-    /**
-     * Assert bahwa TIDAK ada request ke URL tertentu.
-     */
     public function assertNotSent(string $urlPattern): void
     {
-        $found = array_filter(
-            $this->recorded,
-            fn($r) => $this->matches($r['url'], $urlPattern)
-        );
-
-        if (!empty($found)) {
-            throw new \RuntimeException("Assert failed: Request was sent matching '{$urlPattern}'.");
+        if (!empty($this->filter($urlPattern))) {
+            throw new \RuntimeException(
+                "Assert failed: ada request ke '{$urlPattern}'."
+            );
         }
     }
 
-    /**
-     * Assert jumlah total request yang keluar.
-     */
     public function assertSentCount(int $count): void
     {
         $actual = count($this->recorded);
         if ($actual !== $count) {
-            throw new \RuntimeException("Assert failed: Expected {$count} request(s), got {$actual}.");
+            throw new \RuntimeException(
+                "Assert failed: expected {$count} request, got {$actual}."
+            );
         }
     }
 
@@ -129,18 +99,27 @@ class HttpFake
         $this->assertSentCount(0);
     }
 
-    public function recorded(): array
+    public function recorded(): array { return $this->recorded; }
+
+    // ─── Internals ───────────────────────────────────────────────────────
+    private function filter(string $pattern): array
     {
-        return $this->recorded;
+        return array_filter(
+            $this->recorded,
+            fn($r) => $this->matches($r['url'], $pattern)
+        );
     }
 
     private function matches(string $url, string $pattern): bool
     {
-        if ($pattern === '*') {
-            return true;
-        }
-        // Konversi wildcard (*) ke regex
-        $regex = '/^' . str_replace(['\*', '\?'], ['.*', '.'], preg_quote($pattern, '/')) . '$/';
+        if ($pattern === '*') return true;
+
+        $regex = '/^' . str_replace(
+            ['\*', '\?'],
+            ['.*', '.'],
+            preg_quote($pattern, '/')
+        ) . '$/';
+
         return (bool) preg_match($regex, $url);
     }
 }

@@ -1,30 +1,15 @@
 <?php
 namespace Bpjs\Framework\Helpers\Http;
 
-/**
- * Http::pool() — Concurrent HTTP requests menggunakan cURL multi handle.
- *
- * Semua request dieksekusi PARALEL (bukan sequential), sehingga total waktu
- * = request terlama (bukan jumlah semua waktu request).
- *
- * Usage:
- *   $responses = Http::pool(function (HttpPool $pool) {
- *       $pool->as('users')->get('https://api.example.com/users');
- *       $pool->as('posts')->get('https://api.example.com/posts');
- *       $pool->as('tags')->get('https://api.example.com/tags');
- *   });
- *
- *   $responses['users']->json();
- *   $responses['posts']->ok();
- */
 class HttpPool
 {
-    /** @var array<string, array{method: string, url: string, data: mixed, headers: array, options: array}> */
-    private array $requests  = [];
-    private string|null $alias = null;
-    private int   $timeout   = 30;
-    private bool  $verifySsl = true;
+    private array   $requests  = [];
+    private ?string $alias     = null;
+    private array   $headers   = [];   // ← pool-level headers
+    private int     $timeout   = 30;
+    private bool    $verifySsl = true;
 
+    // ─── Pool-level config ───────────────────────────────────────────────
     public function setTimeout(int $seconds): static
     {
         $this->timeout = $seconds;
@@ -37,16 +22,26 @@ class HttpPool
         return $this;
     }
 
-    /**
-     * Beri nama / alias untuk request berikutnya.
-     * Jika tidak dipanggil, index numerik akan digunakan.
-     */
+    /** Headers untuk SEMUA request di pool ini. */
+    public function withHeaders(array $headers): static
+    {
+        $this->headers = array_merge($this->headers, $headers);
+        return $this;
+    }
+
+    /** Shortcut Authorization header untuk semua request. */
+    public function withToken(string $token, string $type = 'Bearer'): static
+    {
+        return $this->withHeaders(['Authorization' => "{$type} {$token}"]);
+    }
+
     public function as(string $alias): static
     {
         $this->alias = $alias;
         return $this;
     }
 
+    // ─── Request methods ─────────────────────────────────────────────────
     public function get(string $url, array $headers = []): static
     {
         return $this->add('GET', $url, null, $headers);
@@ -75,37 +70,38 @@ class HttpPool
     private function add(string $method, string $url, mixed $data, array $headers): static
     {
         $key = $this->alias ?? count($this->requests);
-        $this->requests[$key] = compact('method', 'url', 'data', 'headers');
-        $this->alias = null; // reset setelah dipakai
+
+        // merge pool-level headers + per-request headers
+        $merged = array_merge($this->headers, $headers);
+
+        $this->requests[$key] = compact('method', 'url', 'data') + ['headers' => $merged];
+        $this->alias = null;
         return $this;
     }
 
-    /**
-     * Eksekusi semua request secara paralel.
-     *
-     * @return array<string|int, HttpResponse>
-     */
+    // ─── Execute ─────────────────────────────────────────────────────────
     public function execute(): array
     {
-        $multiHandle = curl_multi_init();
-        $handles     = [];
+        if (empty($this->requests)) {
+            return [];
+        }
+
+        $mh      = curl_multi_init();
+        $handles = [];
 
         foreach ($this->requests as $key => $req) {
             $ch = $this->buildHandle($req);
-            curl_multi_add_handle($multiHandle, $ch);
+            curl_multi_add_handle($mh, $ch);
             $handles[$key] = $ch;
         }
 
-        // Jalankan semua request secara paralel
-        $running = null;
         do {
-            $status = curl_multi_exec($multiHandle, $running);
+            $status = curl_multi_exec($mh, $running);
             if ($running) {
-                curl_multi_select($multiHandle);
+                curl_multi_select($mh);
             }
         } while ($running > 0 && $status === CURLM_OK);
 
-        // Kumpulkan semua response
         $responses = [];
         foreach ($handles as $key => $ch) {
             $body     = curl_multi_getcontent($ch);
@@ -113,24 +109,25 @@ class HttpPool
             $errno    = curl_errno($ch);
             $error    = curl_error($ch);
 
-            curl_multi_remove_handle($multiHandle, $ch);
+            curl_multi_remove_handle($mh, $ch);
             curl_close($ch);
 
             if ($errno) {
-                throw new \RuntimeException("Pool request '{$key}' cURL error ({$errno}): {$error}");
+                throw new \RuntimeException(
+                    "Pool request '{$key}' cURL error ({$errno}): {$error}"
+                );
             }
 
             $responses[$key] = new HttpResponse($httpCode, $body ?? '');
         }
 
-        curl_multi_close($multiHandle);
-
+        curl_multi_close($mh);
         return $responses;
     }
 
     private function buildHandle(array $req): \CurlHandle
     {
-        $ch = curl_init();
+        $ch      = curl_init();
         $headers = $req['headers'];
 
         curl_setopt_array($ch, [

@@ -3,11 +3,12 @@ namespace Bpjs\Framework\Helpers\Http;
 
 class HttpException extends \RuntimeException
 {
-    private $responseBody;
+    private mixed $responseBody;
+
     public function __construct(
-        string           $message,
-        int              $statusCode,
-        $responseBody = null,
+        string $message,
+        int $statusCode,
+        mixed $responseBody = null,
     ) {
         parent::__construct($message, $statusCode);
         $this->responseBody = $responseBody;

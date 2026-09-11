@@ -4,112 +4,69 @@ namespace Bpjs\Framework\Helpers\Http;
 /**
  * Laravel-style HTTP Client Helper.
  *
- * ─── Quick Reference ───────────────────────────────────────────────────────
- *
- *  // Fluent builder
- *  Http::withToken($token)
- *      ->withHeaders(['X-App' => 'BPJS'])
- *      ->timeout(10)
- *      ->retry(3, 200)
- *      ->get('https://api.example.com/users');
- *
- *  // Pool (concurrent / paralel)
- *  $responses = Http::pool(function (HttpPool $pool) {
- *      $pool->as('users')->get('https://api.example.com/users');
- *      $pool->as('posts')->get('https://api.example.com/posts');
- *  });
- *  $responses['users']->json();
- *
- *  // Fake / mock (untuk testing)
- *  Http::fake(['https://api.example.com/*' => ['status' => 200, 'body' => ['ok' => true]]]);
- *  Http::fake()->assertSent('https://api.example.com/*');
- *  Http::resetFake();
- *
- *  // Response object
- *  $res = Http::get('https://api.example.com/users');
- *  $res->ok();             // true / false
- *  $res->json('data.0');   // dot notation
- *  $res->throw();          // lempar exception jika 4xx / 5xx
- *  $res->status();         // integer
- *
- *  // Macro
- *  Http::macro('bpjsApi', fn() => Http::withToken(env('BPJS_TOKEN'))
- *                                      ->baseUrl('https://api.bpjs.go.id'));
- *  Http::bpjsApi()->get('/peserta');
+ * Dua cara pakai (keduanya setara):
+ *   Http::get('https://api.example.com/users');          // static shortcut
+ *   Http::new()->get('https://api.example.com/users');   // instance eksplisit
  */
 class Http
 {
-    // ─── Shared State ─────────────────────────────────────────────────────────
+    // ─── Shared State ────────────────────────────────────────────────────
+    private static ?HttpFake $faker      = null;
+    private static array     $macros     = [];
+    private static array     $middleware = [];
 
-    private static HttpFake $faker;
-    private static array    $macros     = [];
-    private static array    $middleware = []; // global middleware
+    // ─── Instance State ──────────────────────────────────────────────────
+    private array   $headers     = [];
+    private array   $cookies     = [];
+    private array   $queryParams = [];
+    private mixed   $body        = null;
+    private bool    $isMultipart = false;
+    private ?string $baseUrl     = null;
+    private int     $timeout     = 30;
+    private int     $maxRetries  = 0;
+    private int     $retryDelay  = 100;
+    private bool    $verifySsl   = true;
+    private bool    $throwOnError = false;
+    private bool    $exitOnDump  = false;
+    private array   $beforeHooks = [];
+    private array   $afterHooks  = [];
 
-    // ─── Instance State (fluent builder) ─────────────────────────────────────
-
-    private array       $headers        = [];
-    private array       $cookies        = [];
-    private array       $queryParams    = [];
-    private mixed       $body           = null;
-    private bool        $isMultipart    = false;
-    private string|null $baseUrl        = null;
-    private int         $timeout        = 30;
-    private int         $maxRetries     = 0;
-    private int         $retryDelay     = 100; // ms
-    private bool        $verifySsl      = true;
-    private bool        $throwOnError   = false;
-    private array       $beforeHooks    = [];
-    private array       $afterHooks     = [];
-    private bool        $debugMode      = false;
-
-    // ─── Static Entry Points ─────────────────────────────────────────────────
-
+    // ─── Static Entry ────────────────────────────────────────────────────
     public static function new(): static
     {
         $instance = new static();
-        // Terapkan global middleware ke instance baru
         foreach (self::$middleware as $m) {
             $m($instance);
         }
         return $instance;
     }
 
-    // ─── Fluent Builder ───────────────────────────────────────────────────────
-
-    public function baseUrl(string $url): static
+    // ─── Fluent Builder (protected → diakses via __call dari luar) ───────
+    protected function baseUrl(string $url): static
     {
         $this->baseUrl = rtrim($url, '/');
         return $this;
     }
 
-    public function withHeaders(array $headers): static
+    protected function withHeaders(array $headers): static
     {
         $this->headers = array_merge($this->headers, $headers);
         return $this;
     }
 
-    /**
-     * Bearer token: Authorization: Bearer {token}
-     */
-    public function withToken(string $token, string $type = 'Bearer'): static
+    protected function withToken(string $token, string $type = 'Bearer'): static
     {
         return $this->withHeaders(['Authorization' => "{$type} {$token}"]);
     }
 
-    /**
-     * Basic Auth: Authorization: Basic base64(user:pass)
-     */
-    public function withBasicAuth(string $username, string $password): static
+    protected function withBasicAuth(string $username, string $password): static
     {
         return $this->withHeaders([
             'Authorization' => 'Basic ' . base64_encode("{$username}:{$password}"),
         ]);
     }
 
-    /**
-     * Digest Auth (dikirim via cURL native).
-     */
-    public function withDigestAuth(string $username, string $password): static
+    protected function withDigestAuth(string $username, string $password): static
     {
         $this->beforeHooks[] = function (\CurlHandle $ch) use ($username, $password) {
             curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_DIGEST);
@@ -118,88 +75,80 @@ class Http
         return $this;
     }
 
-    public function withQueryParameters(array $params): static
+    protected function withQueryParameters(array $params): static
     {
         $this->queryParams = array_merge($this->queryParams, $params);
         return $this;
     }
 
-    public function withCookies(array $cookies, string $domain = ''): static
+    protected function withCookies(array $cookies): static
     {
         $this->cookies = array_merge($this->cookies, $cookies);
         return $this;
     }
 
-    public function withoutVerifying(): static
+    protected function withoutVerifying(): static
     {
         $this->verifySsl = false;
         return $this;
     }
 
-    public function timeout(int $seconds): static
+    protected function timeout(int $seconds): static
     {
         $this->timeout = $seconds;
         return $this;
     }
 
-    public function retry(int $times, int $sleepMs = 100): static
+    protected function retry(int $times, int $sleepMs = 100): static
     {
         $this->maxRetries = $times;
         $this->retryDelay = $sleepMs;
         return $this;
     }
 
-    /**
-     * Otomatis lempar HttpException jika response 4xx / 5xx.
-     */
-    public function throw(): static
+    protected function throw(): static
     {
         $this->throwOnError = true;
         return $this;
     }
 
-    /**
-     * Tambah hook yang dijalankan sebelum request dikirim.
-     * Callback menerima (string $method, string $url, array &$headers, mixed &$body).
-     */
-    public function beforeSending(callable $hook): static
+    protected function beforeSending(callable $hook): static
     {
         $this->beforeHooks[] = $hook;
         return $this;
     }
 
-    /**
-     * Tambah hook yang dijalankan setelah response diterima.
-     * Callback menerima (HttpResponse $response).
-     */
-    public function afterReceiving(callable $hook): static
+    protected function afterReceiving(callable $hook): static
     {
         $this->afterHooks[] = $hook;
         return $this;
     }
 
-    /**
-     * Dump request & response ke stdout, lanjutkan eksekusi.
-     */
-    public function dump(): static
+    /** Dump request + response ke stdout setelah request selesai. */
+    protected function dump(): static
     {
-        $this->debugMode = true;
+        $this->exitOnDump = false;
+        return $this->enableDebug();
+    }
+
+    /** Sama seperti dump(), tapi exit setelahnya. */
+    protected function dd(): static
+    {
+        $this->exitOnDump = true;
+        return $this->enableDebug();
+    }
+
+    private function enableDebug(): static
+    {
+        // disimpan di afterHooks supaya tidak perlu property khusus
+        $this->afterHooks[] = function (HttpResponse $res) {
+            $res->dump();
+        };
         return $this;
     }
 
-    /**
-     * Dump request & response ke stdout, lalu exit.
-     */
-    public function dd(): never
-    {
-        $this->debugMode = true;
-        $this->get('/'); // trigger dump — biasanya digabung dengan URL nyata
-        exit(1);
-    }
-
-    // ─── HTTP Methods ─────────────────────────────────────────────────────────
-
-    public function get(string $url, array $query = []): HttpResponse
+    // ─── HTTP Verbs ──────────────────────────────────────────────────────
+    protected function get(string $url, array $query = []): HttpResponse
     {
         if (!empty($query)) {
             $this->withQueryParameters($query);
@@ -207,36 +156,31 @@ class Http
         return $this->send('GET', $url);
     }
 
-    public function post(string $url, mixed $data = []): HttpResponse
+    protected function post(string $url, mixed $data = []): HttpResponse
     {
         $this->body = $data;
         return $this->send('POST', $url);
     }
 
-    public function put(string $url, mixed $data = []): HttpResponse
+    protected function put(string $url, mixed $data = []): HttpResponse
     {
         $this->body = $data;
         return $this->send('PUT', $url);
     }
 
-    public function patch(string $url, mixed $data = []): HttpResponse
+    protected function patch(string $url, mixed $data = []): HttpResponse
     {
         $this->body = $data;
         return $this->send('PATCH', $url);
     }
 
-    public function delete(string $url, mixed $data = []): HttpResponse
+    protected function delete(string $url, mixed $data = []): HttpResponse
     {
         $this->body = $data;
         return $this->send('DELETE', $url);
     }
 
-    /**
-     * Multipart/form-data (upload file).
-     *
-     * $files = ['fieldName' => '/path/to/file']
-     */
-    public function attach(string $url, array $fields = [], array $files = []): HttpResponse
+    protected function attach(string $url, array $fields = [], array $files = []): HttpResponse
     {
         $multipart = $fields;
         foreach ($files as $field => $path) {
@@ -254,14 +198,7 @@ class Http
         return $this->send('POST', $url);
     }
 
-    // ─── Pool ─────────────────────────────────────────────────────────────────
-
-    /**
-     * Jalankan banyak request secara PARALEL.
-     *
-     * @param callable(HttpPool): void $callback
-     * @return array<string|int, HttpResponse>
-     */
+    // ─── Pool ────────────────────────────────────────────────────────────
     public static function pool(callable $callback): array
     {
         $pool = new HttpPool();
@@ -269,17 +206,7 @@ class Http
         return $pool->execute();
     }
 
-    // ─── Fake / Mock ──────────────────────────────────────────────────────────
-
-    /**
-     * Aktifkan fake mode.
-     *
-     * Http::fake();                                          // semua → 200 {}
-     * Http::fake(['status' => 404, 'body' => []]);          // semua → 404
-     * Http::fake(['https://api.example.com/*' => [...]]);   // per URL
-     *
-     * @return HttpFake  supaya bisa langsung ->assertSent(...)
-     */
+    // ─── Fake ────────────────────────────────────────────────────────────
     public static function fake(array|null $stubs = null): HttpFake
     {
         self::getFaker()->activate($stubs);
@@ -291,35 +218,46 @@ class Http
         self::getFaker()->deactivate();
     }
 
-    private static function getFaker(): HttpFake
+    public static function getFaker(): HttpFake
     {
-        if (!isset(self::$faker)) {
+        if (self::$faker === null) {
             self::$faker = new HttpFake();
         }
         return self::$faker;
     }
 
-    // ─── Macro ────────────────────────────────────────────────────────────────
+    // ─── Static Assertions (proxy ke faker, TIDAK reset state) ───────────
+    public static function assertSent(string $pattern): void
+    {
+        self::getFaker()->assertSent($pattern);
+    }
 
-    /**
-     * Daftarkan custom method.
-     *
-     * Http::macro('bpjsApi', fn() => Http::withToken(env('BPJS_TOKEN'))
-     *                                     ->baseUrl('https://api.bpjs.go.id'));
-     * Http::bpjsApi()->get('/peserta');
-     */
+    public static function assertNotSent(string $pattern): void
+    {
+        self::getFaker()->assertNotSent($pattern);
+    }
+
+    public static function assertSentCount(int $count): void
+    {
+        self::getFaker()->assertSentCount($count);
+    }
+
+    public static function assertNothingSent(): void
+    {
+        self::getFaker()->assertNothingSent();
+    }
+
+    public static function recorded(): array
+    {
+        return self::getFaker()->recorded();
+    }
+
+    // ─── Macro & Middleware ──────────────────────────────────────────────
     public static function macro(string $name, callable $fn): void
     {
         self::$macros[$name] = $fn;
     }
 
-    /**
-     * Global middleware — diterapkan ke setiap instance baru.
-     *
-     * Http::withMiddleware(function (Http $http) {
-     *     $http->withToken(env('API_TOKEN'));
-     * });
-     */
     public static function withMiddleware(callable $middleware): void
     {
         self::$middleware[] = $middleware;
@@ -330,17 +268,13 @@ class Http
         self::$middleware = [];
     }
 
-    /**
-     * Magic static: Http::get(...), Http::post(...), Http::bpjsApi(), dll.
-     */
+    // ─── Magic ───────────────────────────────────────────────────────────
     public static function __callStatic(string $name, array $args): mixed
     {
-        // Macro
         if (isset(self::$macros[$name])) {
             return (self::$macros[$name])(...$args);
         }
 
-        // Shortcut ke instance method (Http::get(), Http::post(), dll)
         $instance = static::new();
         if (method_exists($instance, $name)) {
             return $instance->$name(...$args);
@@ -349,38 +283,43 @@ class Http
         throw new \BadMethodCallException("Http::{$name}() tidak ditemukan.");
     }
 
-    // ─── Core Send ────────────────────────────────────────────────────────────
+    public function __call(string $name, array $args): mixed
+    {
+        if (method_exists($this, $name)) {
+            return $this->$name(...$args);
+        }
+        throw new \BadMethodCallException("Http::{$name}() tidak ditemukan.");
+    }
 
+    // ─── Core Send ───────────────────────────────────────────────────────
     private function send(string $method, string $url): HttpResponse
     {
         $url = $this->buildUrl($url);
 
-        // Fake mode — jangan kirim request sungguhan
         if (self::getFaker()->isActive()) {
-            return self::getFaker()->resolve($method, $url);
+            $res = self::getFaker()->resolve($method, $url);
+            $this->runAfterHooks($res);
+            if ($this->exitOnDump) exit(1);
+            return $res;
         }
 
-        $attempt   = 0;
+        $attempt = 0;
         $lastError = null;
 
         while (true) {
             try {
                 $response = $this->execute($method, $url);
 
-                if ($this->debugMode) {
-                    $response->dump();
-                }
-
-                // Retry pada 5xx
                 if ($response->serverError() && $attempt < $this->maxRetries) {
                     $attempt++;
                     usleep($this->retryDelay * 1000 * $attempt);
                     continue;
                 }
 
-                // Jalankan after-hooks
-                foreach ($this->afterHooks as $hook) {
-                    $hook($response);
+                $this->runAfterHooks($response);
+
+                if ($this->exitOnDump) {
+                    exit(1);
                 }
 
                 if ($this->throwOnError && $response->failed()) {
@@ -395,7 +334,7 @@ class Http
 
             } catch (HttpException $e) {
                 throw $e;
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 $lastError = $e;
                 if ($attempt < $this->maxRetries) {
                     $attempt++;
@@ -407,10 +346,18 @@ class Http
         }
 
         throw new \RuntimeException(
-            "Request gagal setelah " . ($this->maxRetries + 1) . " percobaan: " . $lastError?->getMessage(),
+            "Request gagal setelah " . ($this->maxRetries + 1) . " percobaan: "
+                . ($lastError?->getMessage() ?? 'unknown'),
             0,
             $lastError
         );
+    }
+
+    private function runAfterHooks(HttpResponse $response): void
+    {
+        foreach ($this->afterHooks as $hook) {
+            $hook($response);
+        }
     }
 
     private function execute(string $method, string $url): HttpResponse
@@ -428,10 +375,9 @@ class Http
             CURLOPT_SSL_VERIFYHOST => $this->verifySsl ? 2 : 0,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 5,
-            CURLOPT_HEADER         => true, // untuk ambil response headers
+            CURLOPT_HEADER         => true,
         ]);
 
-        // Cookies
         if (!empty($this->cookies)) {
             $cookieStr = implode('; ', array_map(
                 fn($k, $v) => "{$k}={$v}",
@@ -441,11 +387,9 @@ class Http
             curl_setopt($ch, CURLOPT_COOKIE, $cookieStr);
         }
 
-        // Body
         if ($this->body !== null && $this->body !== []) {
             if ($this->isMultipart) {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $this->body);
-                // Jangan set Content-Type manual; cURL akan set multipart boundary otomatis
             } else {
                 $json = json_encode($this->body);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $json);
@@ -454,12 +398,13 @@ class Http
             }
         }
 
-        // Before hooks (akses ke CurlHandle langsung)
+        // Before hooks
         foreach ($this->beforeHooks as $hook) {
             if ($hook instanceof \Closure) {
-                $ref = new \ReflectionFunction($hook);
+                $ref        = new \ReflectionFunction($hook);
                 $firstParam = $ref->getParameters()[0] ?? null;
-                if ($firstParam && $firstParam->getType()?->getName() === \CurlHandle::class) {
+                $type       = $firstParam?->getType()?->getName();
+                if ($type === \CurlHandle::class) {
                     $hook($ch);
                     continue;
                 }
@@ -467,7 +412,6 @@ class Http
             $hook($method, $url, $headers, $this->body);
         }
 
-        // Set headers sebagai array
         $headerArray = array_map(
             fn($k, $v) => is_int($k) ? $v : "{$k}: {$v}",
             array_keys($headers),
@@ -477,10 +421,10 @@ class Http
             curl_setopt($ch, CURLOPT_HTTPHEADER, $headerArray);
         }
 
-        $raw      = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $errno    = curl_errno($ch);
-        $errMsg   = curl_error($ch);
+        $raw        = curl_exec($ch);
+        $httpCode   = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $errno      = curl_errno($ch);
+        $errMsg     = curl_error($ch);
         $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
 
         curl_close($ch);
@@ -495,11 +439,9 @@ class Http
         return new HttpResponse($httpCode, $body, $responseHeaders);
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
-
+    // ─── Helpers ─────────────────────────────────────────────────────────
     private function buildUrl(string $url): string
     {
-        // Gabungkan dengan base URL jika URL tidak absolute
         if ($this->baseUrl && !str_starts_with($url, 'http')) {
             $url = $this->baseUrl . '/' . ltrim($url, '/');
         }
@@ -514,11 +456,10 @@ class Http
 
     private function buildHeaders(): array
     {
-        $defaults = [
+        return array_merge([
             'Accept'     => 'application/json',
             'User-Agent' => 'Bpjs-Http/1.0',
-        ];
-        return array_merge($defaults, $this->headers);
+        ], $this->headers);
     }
 
     private function parseHeaders(string $raw): array

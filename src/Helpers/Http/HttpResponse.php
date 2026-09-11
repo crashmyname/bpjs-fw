@@ -1,104 +1,40 @@
 <?php
 namespace Bpjs\Framework\Helpers\Http;
 
-/**
- * Laravel-style HTTP Response wrapper.
- *
- * Usage:
- *   $res = Http::get('https://api.example.com/users');
- *   $res->ok();           // true jika status 200–299
- *   $res->json();         // decode JSON sebagai array
- *   $res->json('data.0'); // dot-notation access
- *   $res->throw();        // lempar exception jika gagal
- *   $res->status();       // integer HTTP status
- */
-class HttpResponse
+class HttpResponse implements \ArrayAccess
 {
     private int    $status;
     private string $body;
     private array  $headers;
+    private ?array $decoded = null;   // ← FIX: property yang hilang
 
-    public function __construct(
-        int    $status,
-        string $body,
-        array  $headers = [],
-    ) {
-        $this->status = $status;
-        $this->body = $body;
+    public function __construct(int $status, string $body, array $headers = [])
+    {
+        $this->status  = $status;
+        $this->body    = $body;
         $this->headers = $headers;
     }
 
-    // ─── Status Checks ────────────────────────────────────────────────────────
+    // ─── Status ──────────────────────────────────────────────────────────
+    public function status(): int           { return $this->status; }
+    public function ok(): bool              { return $this->status >= 200 && $this->status < 300; }
+    public function successful(): bool      { return $this->ok(); }
+    public function created(): bool         { return $this->status === 201; }
+    public function noContent(): bool       { return $this->status === 204; }
+    public function redirect(): bool        { return $this->status >= 300 && $this->status < 400; }
+    public function unauthorized(): bool    { return $this->status === 401; }
+    public function forbidden(): bool       { return $this->status === 403; }
+    public function notFound(): bool        { return $this->status === 404; }
+    public function clientError(): bool     { return $this->status >= 400 && $this->status < 500; }
+    public function serverError(): bool     { return $this->status >= 500; }
+    public function failed(): bool          { return $this->clientError() || $this->serverError(); }
 
-    public function status(): int
-    {
-        return $this->status;
-    }
-
-    public function ok(): bool
-    {
-        return $this->status >= 200 && $this->status < 300;
-    }
-
-    public function created(): bool
-    {
-        return $this->status === 201;
-    }
-
-    public function noContent(): bool
-    {
-        return $this->status === 204;
-    }
-
-    public function redirect(): bool
-    {
-        return $this->status >= 300 && $this->status < 400;
-    }
-
-    public function unauthorized(): bool
-    {
-        return $this->status === 401;
-    }
-
-    public function forbidden(): bool
-    {
-        return $this->status === 403;
-    }
-
-    public function notFound(): bool
-    {
-        return $this->status === 404;
-    }
-
-    public function clientError(): bool
-    {
-        return $this->status >= 400 && $this->status < 500;
-    }
-
-    public function serverError(): bool
-    {
-        return $this->status >= 500;
-    }
-
-    public function failed(): bool
-    {
-        return $this->clientError() || $this->serverError();
-    }
-
-    public function successful(): bool
-    {
-        return $this->ok();
-    }
-
-    // ─── Body Access ─────────────────────────────────────────────────────────
-
-    /**
-     * Decode JSON body. Supports dot-notation: $res->json('user.name')
-     */
-    public function json(string $key = null, mixed $default = null): mixed
+    // ─── Body ────────────────────────────────────────────────────────────
+    public function json(?string $key = null, mixed $default = null): mixed
     {
         if ($this->decoded === null) {
-            $this->decoded = json_decode($this->body, true) ?? [];
+            $decoded       = json_decode($this->body, true);
+            $this->decoded = is_array($decoded) ? $decoded : [];
         }
 
         if ($key === null) {
@@ -108,38 +44,19 @@ class HttpResponse
         return $this->dotGet($this->decoded, $key, $default);
     }
 
-    public function body(): string
-    {
-        return $this->body;
-    }
+    public function body(): string          { return $this->body; }
+    public function object(): ?object       { return json_decode($this->body); }
+    public function collect(): array        { return $this->json() ?? []; }
 
-    public function object(): object|null
-    {
-        return json_decode($this->body);
-    }
-
-    public function collect(): array
-    {
-        return $this->json() ?? [];
-    }
-
-    // ─── Headers ─────────────────────────────────────────────────────────────
-
-    public function header(string $name): string|null
+    // ─── Headers ─────────────────────────────────────────────────────────
+    public function header(string $name): ?string
     {
         return $this->headers[strtolower($name)] ?? null;
     }
 
-    public function headers(): array
-    {
-        return $this->headers;
-    }
+    public function headers(): array { return $this->headers; }
 
-    // ─── Exception Helpers ────────────────────────────────────────────────────
-
-    /**
-     * Lempar HttpException jika response gagal (4xx / 5xx).
-     */
+    // ─── Exception ───────────────────────────────────────────────────────
     public function throw(): static
     {
         if ($this->failed()) {
@@ -152,27 +69,17 @@ class HttpResponse
         return $this;
     }
 
-    /**
-     * Lempar exception hanya jika kondisi $condition terpenuhi.
-     */
     public function throwIf(bool $condition): static
     {
-        if ($condition) {
-            return $this->throw();
-        }
-        return $this;
+        return $condition ? $this->throw() : $this;
     }
 
     public function throwUnlessStatus(int $status): static
     {
-        if ($this->status !== $status) {
-            return $this->throw();
-        }
-        return $this;
+        return $this->status !== $status ? $this->throw() : $this;
     }
 
-    // ─── Debug ────────────────────────────────────────────────────────────────
-
+    // ─── Debug ───────────────────────────────────────────────────────────
     public function dd(): never
     {
         $this->dump();
@@ -184,26 +91,45 @@ class HttpResponse
         echo "\n[HttpResponse]\n";
         echo "  Status  : {$this->status}\n";
         echo "  Headers : " . json_encode($this->headers, JSON_PRETTY_PRINT) . "\n";
-        echo "  Body    : " . json_encode($this->json() ?? $this->body, JSON_PRETTY_PRINT) . "\n\n";
+        echo "  Body    : " . json_encode($this->json(), JSON_PRETTY_PRINT) . "\n\n";
         return $this;
     }
 
-    // ─── Array Access ─────────────────────────────────────────────────────────
-
-    public function offsetGet(string $key): mixed
+    // ─── ArrayAccess ─────────────────────────────────────────────────────
+    public function offsetExists(mixed $offset): bool
     {
-        return $this->json($key);
+        return $this->json($offset, '__missing__') !== '__missing__';
     }
 
-    // ─── Internals ────────────────────────────────────────────────────────────
+    public function offsetGet(mixed $offset): mixed
+    {
+        return $this->json($offset);
+    }
 
+    public function offsetSet(mixed $offset, mixed $value): void
+    {
+        throw new \LogicException('HttpResponse bersifat immutable.');
+    }
+
+    public function offsetUnset(mixed $offset): void
+    {
+        throw new \LogicException('HttpResponse bersifat immutable.');
+    }
+
+    // ─── Internals ───────────────────────────────────────────────────────
     private function dotGet(array $array, string $key, mixed $default): mixed
     {
         foreach (explode('.', $key) as $segment) {
-            if (!is_array($array) || !array_key_exists($segment, $array)) {
-                return $default;
+            if (is_array($array) && array_key_exists($segment, $array)) {
+                $array = $array[$segment];
+                continue;
             }
-            $array = $array[$segment];
+            // support numeric index untuk list
+            if (is_array($array) && ctype_digit($segment) && array_key_exists((int) $segment, $array)) {
+                $array = $array[(int) $segment];
+                continue;
+            }
+            return $default;
         }
         return $array;
     }
