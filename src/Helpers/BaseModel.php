@@ -537,7 +537,19 @@ class BaseModel
 
     protected function freshTimestamp(): string
     {
-        return (new \DateTime())->format('Y-m-d H:i:s');
+        $tz = 'Asia/Jakarta';
+        if (function_exists('config')) {
+            $tz = config('app.timezone') ?: $tz;
+        } elseif (function_exists('env')) {
+            $tz = env('TIMEZONE', $tz);
+        }
+
+        try {
+            $dt = new \DateTime('now', new \DateTimeZone($tz));
+            return $dt->format('Y-m-d H:i:s');
+        } catch (\Exception $e) {
+            return (new \DateTime('now'))->format('Y-m-d H:i:s');
+        }
     }
 
     // =========================================================================
