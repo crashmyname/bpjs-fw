@@ -4,6 +4,7 @@ namespace Bpjs\Framework\Helpers;
 use Bpjs\Framework\Helpers\User;
 
 class Session {
+
     public function __construct() {
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
@@ -22,6 +23,10 @@ class Session {
         if (isset($_SESSION[$key])) {
             unset($_SESSION[$key]);
         }
+    }
+
+    public static function delete($key) {
+        self::remove($key);
     }
 
     public static function destroy() {
