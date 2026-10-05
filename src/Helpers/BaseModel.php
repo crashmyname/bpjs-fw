@@ -153,6 +153,11 @@ class BaseModel
     protected ?string $compiledSql = null;
 
     // ---- State flags --------------------------------------------------------
+    /**
+     * Lock clause untuk SELECT (FOR UPDATE / FOR SHARE / dll).
+     * Di-set via lockForUpdate() / sharedLock(), diappend di compileSelect().
+     */
+    protected string $lockClause = '';
 
     /**
      * Jika true, query akan menyertakan baris soft-deleted.
@@ -1898,22 +1903,18 @@ class BaseModel
     // LOCKING
     // =========================================================================
 
-    public function lockForUpdate(): array
+    public function lockForUpdate(): static
     {
-        $sql  = $this->compileLockSelect($this->g()->lockForUpdate());
-        $stmt = $this->connection->prepare($sql);
-        $this->bindAll($stmt);
-        $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_OBJ);
+        $this->lockClause  = $this->g()->lockForUpdate();
+        $this->compiledSql = null;
+        return $this;
     }
 
-    public function sharedLock(): array
+    public function sharedLock(): static
     {
-        $sql  = $this->compileLockSelect($this->g()->lockForShare());
-        $stmt = $this->connection->prepare($sql);
-        $this->bindAll($stmt);
-        $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_OBJ);
+        $this->lockClause  = $this->g()->lockForShare();
+        $this->compiledSql = null;
+        return $this;
     }
 
     private function compileLockSelect(string $lockHint): string
@@ -2336,6 +2337,19 @@ class BaseModel
             $this->limit,
             $this->offset
         );
+
+        if ($this->lockClause !== '') {
+            if ($this->g()->driverName() === 'sqlsrv') {
+                $wrapped = $this->g()->wrapTable($this->resolveTable());
+                $this->compiledSql = str_replace(
+                    "FROM {$wrapped}",
+                    "FROM {$wrapped} {$this->lockClause}",
+                    $this->compiledSql
+                );
+            } else {
+                $this->compiledSql .= ' ' . $this->lockClause;
+            }
+        }
 
         return $this->compiledSql;
     }
