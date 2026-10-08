@@ -491,7 +491,7 @@ function storage_secure(string $filename, int $ttlSeconds = 3600): string
 
     $token = Bpjs\Framework\Helpers\Crypto::encrypt($payload);
 
-    return base_url() . 'file/secure?token=' . urlencode($token);
+    return base_url() . '/file/secure?token=' . urlencode($token);
 }
 
 function serve_secure_file()
